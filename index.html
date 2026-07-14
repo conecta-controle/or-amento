@@ -19,18 +19,12 @@
 <body>
 <div id="root"></div>
 
-<!-- Firebase (modular SDK via CDN) -->
-<script type="module">
-  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-  import {
-    getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword,
-    onAuthStateChanged, signOut
-  } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-  import {
-    getFirestore, doc, getDoc, setDoc, collection, getDocs
-  } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-
-  const firebaseConfig = {
+<!-- Firebase (compat SDK via CDN, plain scripts, no ES modules) -->
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script>
+  var firebaseConfig = {
     apiKey: "AIzaSyDqypd1vuXBXpJcwlQEKB6axMJY9LNGoJA",
     authDomain: "conecta-controle.firebaseapp.com",
     projectId: "conecta-controle",
@@ -39,16 +33,23 @@
     appId: "1:114002546614:web:56f4bf00e5f9816ebcfb17",
     measurementId: "G-9DNNK9KEB1"
   };
+  firebase.initializeApp(firebaseConfig);
+  var auth = firebase.auth();
+  var db = firebase.firestore();
 
-  const app = initializeApp(firebaseConfig);
-  const auth = getAuth(app);
-  const db = getFirestore(app);
-
-  // Expose to the global scope so the Babel-transpiled React script below can use it
+  // Small wrapper matching the modular-style API the React app expects
   window.__firebase = {
-    auth, db, doc, getDoc, setDoc, collection, getDocs,
-    createUserWithEmailAndPassword, signInWithEmailAndPassword,
-    onAuthStateChanged, signOut
+    auth: auth,
+    db: db,
+    doc: function (dbRef, ...segments) { return dbRef.collection(segments[0]).doc(segments[1]).collection(segments[2]).doc(segments[3]); },
+    getDoc: function (ref) { return ref.get(); },
+    setDoc: function (ref, data) { return ref.set(data); },
+    collection: function (dbRef, ...segments) { return dbRef.collection(segments[0]).doc(segments[1]).collection(segments[2]); },
+    getDocs: function (colRef) { return colRef.get(); },
+    createUserWithEmailAndPassword: function (a, email, password) { return auth.createUserWithEmailAndPassword(email, password); },
+    signInWithEmailAndPassword: function (a, email, password) { return auth.signInWithEmailAndPassword(email, password); },
+    onAuthStateChanged: function (a, cb) { return auth.onAuthStateChanged(cb); },
+    signOut: function (a) { return auth.signOut(); }
   };
   window.dispatchEvent(new Event("firebase-ready"));
 </script>
@@ -129,7 +130,7 @@ async function loadMonth(uidStr, key) {
   const f = fb();
   const ref = f.doc(f.db, "users", uidStr, "months", key);
   const snap = await f.getDoc(ref);
-  return snap.exists() ? snap.data() : null;
+  return snap.exists ? snap.data() : null;
 }
 async function saveMonth(uidStr, key, data) {
   const f = fb();
