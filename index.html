@@ -11,9 +11,25 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
-  body { font-family: 'IBM Plex Sans', sans-serif; }
+  :root {
+    color-scheme: light;
+    --ink: #1C2B24; --bg: #EDF1EA; --surface: #FFFFFF; --green: #1F6F54; --navy: #2B3A67;
+    --brick: #B2453F; --gold: #B8873A; --line: #DBE2D6; --input-bg: #FBFCFA; --tab-bg: #E2E9DE;
+    --muted-1: #7C8A7C; --muted-2: #8A9587; --muted-3: #5C6A5F; --muted-4: #9CA89C; --muted-5: #6B7A67;
+    --overlay: rgba(28,43,36,0.35);
+  }
+  [data-theme="dark"] {
+    color-scheme: dark;
+    --ink: #E7ECE7; --bg: #101915; --surface: #182620; --green: #3FA37D; --navy: #7C93D6;
+    --brick: #E28E85; --gold: #DDB165; --line: #2B3B32; --input-bg: #101915; --tab-bg: #22322A;
+    --muted-1: #93A196; --muted-2: #7E8C82; --muted-3: #ABB6AC; --muted-4: #6C7A70; --muted-5: #9AA79A;
+    --overlay: rgba(0,0,0,0.6);
+  }
+  body { font-family: 'IBM Plex Sans', sans-serif; background: var(--bg); transition: background 0.15s; }
   .font-serif-app { font-family: 'Fraunces', serif; }
   .font-mono-app { font-family: 'IBM Plex Mono', monospace; }
+  input, select, textarea { background: var(--surface); color: var(--ink); }
+  input::placeholder { color: var(--muted-4); }
 </style>
 </head>
 <body>
@@ -46,6 +62,7 @@
     setDoc: function (ref, data) { return ref.set(data); },
     collection: function (dbRef, ...segments) { return dbRef.collection(segments[0]).doc(segments[1]).collection(segments[2]); },
     getDocs: function (colRef) { return colRef.get(); },
+    collectionGroup: function (dbRef, name) { return dbRef.collectionGroup(name); },
     createUserWithEmailAndPassword: function (a, email, password) { return auth.createUserWithEmailAndPassword(email, password); },
     signInWithEmailAndPassword: function (a, email, password) { return auth.signInWithEmailAndPassword(email, password); },
     onAuthStateChanged: function (a, cb) { return auth.onAuthStateChanged(cb); },
@@ -60,14 +77,14 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
 /* ---------------------------------------------------------------
    Tokens
 ----------------------------------------------------------------*/
-const INK = "#1C2B24";
-const BG = "#EDF1EA";
-const SURFACE = "#FFFFFF";
-const GREEN = "#1F6F54";
-const NAVY = "#2B3A67";
-const BRICK = "#B2453F";
-const GOLD = "#B8873A";
-const LINE = "#DBE2D6";
+const INK = "var(--ink)";
+const BG = "var(--bg)";
+const SURFACE = "var(--surface)";
+const GREEN = "var(--green)";
+const NAVY = "var(--navy)";
+const BRICK = "var(--brick)";
+const GOLD = "var(--gold)";
+const LINE = "var(--line)";
 const PALETTE = [GOLD, NAVY, "#5C8A76", BRICK, "#7C6FA8", "#4C7A96", "#C97B3D", "#8A9A5B"];
 const MESES = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
 const DEFAULT_CATEGORIES = ["Moradia","Contas","Carro","Saúde","Exercício","Viagens","Reserva de Emergência"];
@@ -92,6 +109,26 @@ function emptyMonthData() {
 }
 function receitaTotal(d) { return (d.salario || 0) + (d.extras || []).reduce((s, r) => s + r.valor, 0); }
 function despesasTotal(d) { return (d.fixas || []).reduce((s, r) => s + r.valor, 0) + (d.variaveis || []).reduce((s, r) => s + r.valor, 0); }
+
+/* ---------------------------------------------------------------
+   Theme
+----------------------------------------------------------------*/
+function getStoredTheme() {
+  const saved = localStorage.getItem("theme");
+  if (saved === "light" || saved === "dark") return saved;
+  return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+function applyTheme(mode) {
+  document.documentElement.setAttribute("data-theme", mode);
+  localStorage.setItem("theme", mode);
+}
+function ThemeToggle({ theme, onToggle }) {
+  return (
+    <button onClick={onToggle} className="p-2 rounded-lg border shrink-0" style={{ borderColor: LINE, background: SURFACE }} aria-label="Alternar tema claro/escuro">
+      {theme === "dark" ? <I.Sun className="w-4 h-4" style={{ color: GOLD }} /> : <I.Moon className="w-4 h-4" style={{ color: "var(--muted-1)" }} />}
+    </button>
+  );
+}
 
 /* ---------------------------------------------------------------
    Minimal inline icon set (no external icon library needed)
@@ -122,12 +159,18 @@ const I = {
   Trend: (p) => <Icon {...p} path='<path d="M3 17l6-6 4 4 8-8"/><path d="M17 7h4v4"/>' />,
   Spinner: (p) => <Icon {...p} path='<path d="M21 12a9 9 0 1 1-9-9"/>' />,
   Landmark: (p) => <Icon {...p} path='<path d="M3 22h18M6 18v-7M10 18v-7M14 18v-7M18 18v-7M3 11l9-6 9 6"/>' />,
+  Sun: (p) => <Icon {...p} path='<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>' />,
+  Moon: (p) => <Icon {...p} path='<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/>' />,
+  Target: (p) => <Icon {...p} path='<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1" fill="currentColor"/>' />,
+  Calendar: (p) => <Icon {...p} path='<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 10h18"/>' />,
+  Users: (p) => <Icon {...p} path='<circle cx="9" cy="8" r="3"/><path d="M2 20c0-3.3 3.1-5 7-5s7 1.7 7 5"/><circle cx="17" cy="8" r="2.6"/><path d="M16 4.2c1.2.3 2 1.4 2 2.8s-.8 2.5-2 2.8"/><path d="M18 15.3c2.3.4 4 1.7 4 4.7"/>' />,
 };
 
 /* ---------------------------------------------------------------
    Firestore helpers
 ----------------------------------------------------------------*/
 function fb() { return window.__firebase; }
+const RESERVED_MONTH_KEYS = new Set(["_investimentos", "_profile", "_meta"]);
 // Legacy docs stored a flat `receita` number; new docs split it into salario + extras.
 function migrateMonth(raw) {
   if (!raw) return raw;
@@ -152,8 +195,8 @@ async function loadAllMonths(uidStr) {
   const colRef = f.collection(f.db, "users", uidStr, "months");
   const snap = await f.getDocs(colRef);
   const out = [];
-  // "_investimentos" is a reserved key in this same collection (see load/saveInvestimentos) — not a real month.
-  snap.forEach((d) => { if (d.id !== "_investimentos") out.push(migrateMonth(d.data())); });
+  // "_investimentos"/"_profile"/"_meta" are reserved keys in this same collection — not real months.
+  snap.forEach((d) => { if (!RESERVED_MONTH_KEYS.has(d.id)) out.push(migrateMonth(d.data())); });
   return out;
 }
 async function loadInvestimentos(uidStr) {
@@ -167,6 +210,37 @@ async function saveInvestimentos(uidStr, aportes) {
   const ref = f.doc(f.db, "users", uidStr, "months", "_investimentos");
   await f.setDoc(ref, { aportes }, { merge: false });
 }
+// Lightweight profile doc (email + signup date) written by each user for the admin account list.
+async function saveProfile(uidStr, email) {
+  const f = fb();
+  const ref = f.doc(f.db, "users", uidStr, "months", "_profile");
+  await f.setDoc(ref, { email, createdAt: new Date().toISOString() }, { merge: false });
+}
+// Accounts created before the profile doc existed get backfilled on their next login.
+async function ensureProfile(uidStr, email) {
+  const f = fb();
+  const ref = f.doc(f.db, "users", uidStr, "months", "_profile");
+  const snap = await f.getDoc(ref);
+  if (!snap.exists) await f.setDoc(ref, { email, createdAt: new Date().toISOString() }, { merge: false });
+}
+async function loadAllProfiles() {
+  const f = fb();
+  const snap = await f.getDocs(f.collectionGroup(f.db, "months"));
+  const out = [];
+  snap.forEach((d) => { if (d.id === "_profile") out.push(d.data()); });
+  return out;
+}
+async function loadMeta(uidStr) {
+  const f = fb();
+  const ref = f.doc(f.db, "users", uidStr, "months", "_meta");
+  const snap = await f.getDoc(ref);
+  return snap.exists ? (snap.data().valor || 0) : 0;
+}
+async function saveMeta(uidStr, valor) {
+  const f = fb();
+  const ref = f.doc(f.db, "users", uidStr, "months", "_meta");
+  await f.setDoc(ref, { valor }, { merge: false });
+}
 
 /* ---------------------------------------------------------------
    Small UI atoms
@@ -177,9 +251,9 @@ function LedgerNumber({ value, className = "", color }) {
 function IconField({ icon: IconComp, ...props }) {
   return (
     <div className="relative">
-      <IconComp className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2" style={{ color: "#8A9587" }} />
+      <IconComp className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2" style={{ color: "var(--muted-2)" }} />
       <input {...props} className="w-full rounded-lg border pl-9 pr-3 py-2.5 text-base sm:text-sm outline-none transition focus:ring-2"
-        style={{ borderColor: LINE, background: "#FBFCFA", color: INK }} />
+        style={{ borderColor: LINE, background: "var(--input-bg)", color: INK }} />
     </div>
   );
 }
@@ -187,7 +261,7 @@ function IconField({ icon: IconComp, ...props }) {
 /* ---------------------------------------------------------------
    Auth screen
 ----------------------------------------------------------------*/
-function AuthScreen() {
+function AuthScreen({ theme, onToggleTheme }) {
   const [mode, setMode] = useState("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -203,7 +277,8 @@ function AuthScreen() {
     const f = fb();
     try {
       if (mode === "register") {
-        await f.createUserWithEmailAndPassword(f.auth, email.trim(), password);
+        const cred = await f.createUserWithEmailAndPassword(f.auth, email.trim(), password);
+        await saveProfile(cred.user.uid, email.trim());
       } else {
         await f.signInWithEmailAndPassword(f.auth, email.trim(), password);
       }
@@ -222,21 +297,22 @@ function AuthScreen() {
   }
 
   return (
-    <div className="min-h-screen w-full flex items-center justify-center px-4" style={{ background: BG }}>
+    <div className="min-h-screen w-full flex items-center justify-center px-4 relative" style={{ background: BG }}>
+      <div className="absolute top-4 right-4"><ThemeToggle theme={theme} onToggle={onToggleTheme} /></div>
       <div className="w-full max-w-sm">
         <div className="flex flex-col items-center mb-6">
           <div className="w-12 h-12 rounded-xl flex items-center justify-center mb-3" style={{ background: GREEN }}>
             <I.Landmark className="w-6 h-6 text-white" />
           </div>
           <h1 className="text-2xl font-serif-app" style={{ color: INK }}>Meu Orçamento</h1>
-          <p className="text-sm mt-1" style={{ color: "#5C6A5F" }}>Cada pessoa tem sua própria planilha</p>
+          <p className="text-sm mt-1" style={{ color: "var(--muted-3)" }}>Cada pessoa tem sua própria planilha</p>
         </div>
         <div className="rounded-2xl p-6" style={{ background: SURFACE, border: `1px solid ${LINE}` }}>
           <div className="flex mb-5 rounded-lg p-1" style={{ background: BG }}>
             {["login", "register"].map((m) => (
               <button key={m} onClick={() => { setMode(m); setError(""); }}
                 className="flex-1 py-2 text-sm rounded-md font-medium transition"
-                style={mode === m ? { background: SURFACE, color: INK, boxShadow: "0 1px 2px rgba(0,0,0,0.06)" } : { color: "#7C8A7C" }}>
+                style={mode === m ? { background: SURFACE, color: INK, boxShadow: "0 1px 2px rgba(0,0,0,0.06)" } : { color: "var(--muted-1)" }}>
                 {m === "login" ? "Entrar" : "Cadastrar"}
               </button>
             ))}
@@ -245,7 +321,7 @@ function AuthScreen() {
             <IconField icon={I.User} placeholder="E-mail" type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="username" />
             <div className="relative">
               <IconField icon={I.Lock} placeholder="Senha" type={showPw ? "text" : "password"} value={password} onChange={(e) => setPassword(e.target.value)} autoComplete={mode === "login" ? "current-password" : "new-password"} />
-              <button type="button" onClick={() => setShowPw((s) => !s)} className="absolute right-3 top-1/2 -translate-y-1/2" style={{ color: "#8A9587" }}>
+              <button type="button" onClick={() => setShowPw((s) => !s)} className="absolute right-3 top-1/2 -translate-y-1/2" style={{ color: "var(--muted-2)" }}>
                 {showPw ? <I.EyeOff className="w-4 h-4" /> : <I.Eye className="w-4 h-4" />}
               </button>
             </div>
@@ -257,7 +333,7 @@ function AuthScreen() {
             </button>
           </form>
         </div>
-        <p className="text-[11px] text-center mt-4" style={{ color: "#8A9587" }}>Seus dados ficam salvos com segurança, vinculados ao seu login.</p>
+        <p className="text-[11px] text-center mt-4" style={{ color: "var(--muted-2)" }}>Seus dados ficam salvos com segurança, vinculados ao seu login.</p>
       </div>
     </div>
   );
@@ -270,7 +346,7 @@ function Donut({ items }) {
   const data = items.filter((i) => i.value > 0);
   const total = data.reduce((s, i) => s + i.value, 0);
   if (data.length === 0) {
-    return <div className="h-52 flex items-center justify-center text-sm" style={{ color: "#9CA89C" }}>Sem lançamentos ainda</div>;
+    return <div className="h-52 flex items-center justify-center text-sm" style={{ color: "var(--muted-4)" }}>Sem lançamentos ainda</div>;
   }
   const R = 70, C = 2 * Math.PI * R;
   let offset = 0;
@@ -297,7 +373,7 @@ function Legend({ items }) {
   return (
     <div className="flex flex-wrap gap-x-4 gap-y-1.5 mt-2">
       {items.filter((i) => i.value > 0).map((i, idx) => (
-        <div key={idx} className="flex items-center gap-1.5 text-xs" style={{ color: "#5C6A5F" }}>
+        <div key={idx} className="flex items-center gap-1.5 text-xs" style={{ color: "var(--muted-3)" }}>
           <span className="w-2 h-2 rounded-full" style={{ background: i.color }} />
           <span>{Math.round((i.value / total) * 100)}% {i.name}</span>
         </div>
@@ -313,7 +389,7 @@ function SummaryCard({ label, value, icon: IconComp, color, action }) {
   return (
     <div className="rounded-xl p-4 flex-1 min-w-[150px]" style={{ background: SURFACE, border: `1px solid ${LINE}` }}>
       <div className="flex items-center justify-between mb-2">
-        <div className="flex items-center gap-1.5 text-[11px] font-medium tracking-wide uppercase" style={{ color: "#7C8A7C" }}>
+        <div className="flex items-center gap-1.5 text-[11px] font-medium tracking-wide uppercase" style={{ color: "var(--muted-1)" }}>
           <IconComp className="w-3.5 h-3.5" style={{ color }} />{label}
         </div>
         {action}
@@ -346,31 +422,31 @@ function ExpenseModal({ kind, initial, categorias, onSave, onClose, onAddCategor
     onSave({ id: initial?.id || uid(), nome: nome.trim(), valor: Number(valor), data, ...(kind === "variavel" ? { categoria: categoria || "Outros" } : {}) });
   }
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center px-4" style={{ background: "rgba(28,43,36,0.35)" }} onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center px-4" style={{ background: "var(--overlay)" }} onClick={onClose}>
       <div className="w-full max-w-sm max-h-[90vh] overflow-y-auto rounded-2xl p-5" style={{ background: SURFACE }} onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
           <h3 className="font-serif-app text-lg" style={{ color: INK }}>{initial ? "Editar" : KIND_META[kind].article} {KIND_META[kind].noun}</h3>
-          <button onClick={onClose}><I.X className="w-4 h-4" style={{ color: "#8A9587" }} /></button>
+          <button onClick={onClose}><I.X className="w-4 h-4" style={{ color: "var(--muted-2)" }} /></button>
         </div>
         <form onSubmit={submit} className="space-y-3">
           <div>
-            <label className="text-xs font-medium" style={{ color: "#7C8A7C" }}>Data</label>
+            <label className="text-xs font-medium" style={{ color: "var(--muted-1)" }}>Data</label>
             <input type="date" value={data} onChange={(e) => setData(e.target.value)} className="w-full mt-1 rounded-lg border px-3 py-2 text-base sm:text-sm outline-none" style={{ borderColor: LINE }} />
           </div>
           <div>
-            <label className="text-xs font-medium" style={{ color: "#7C8A7C" }}>Nome</label>
+            <label className="text-xs font-medium" style={{ color: "var(--muted-1)" }}>Nome</label>
             <input value={nome} onChange={(e) => setNome(e.target.value)} placeholder="Ex: Aluguel" className="w-full mt-1 rounded-lg border px-3 py-2 text-base sm:text-sm outline-none" style={{ borderColor: LINE }} />
           </div>
           <div>
-            <label className="text-xs font-medium" style={{ color: "#7C8A7C" }}>Valor (R$)</label>
+            <label className="text-xs font-medium" style={{ color: "var(--muted-1)" }}>Valor (R$)</label>
             <input type="number" step="0.01" min="0" value={valor} onChange={(e) => setValor(e.target.value)} placeholder="0,00" className="w-full mt-1 rounded-lg border px-3 py-2 text-base sm:text-sm outline-none font-mono-app" style={{ borderColor: LINE }} />
           </div>
           {kind === "variavel" && (
             <div>
-              <label className="text-xs font-medium" style={{ color: "#7C8A7C" }}>Categoria</label>
+              <label className="text-xs font-medium" style={{ color: "var(--muted-1)" }}>Categoria</label>
               {!addingCat ? (
                 <select value={categoria} onChange={(e) => { if (e.target.value === "__new__") { setAddingCat(true); return; } setCategoria(e.target.value); }}
-                  className="w-full mt-1 rounded-lg border px-3 py-2 text-base sm:text-sm outline-none bg-white" style={{ borderColor: LINE }}>
+                  className="w-full mt-1 rounded-lg border px-3 py-2 text-base sm:text-sm outline-none" style={{ borderColor: LINE, background: SURFACE, color: INK }}>
                   <option value="">Selecione…</option>
                   {categorias.map((c) => <option key={c} value={c}>{c}</option>)}
                   <option value="__new__">+ Nova categoria</option>
@@ -392,11 +468,11 @@ function ExpenseModal({ kind, initial, categorias, onSave, onClose, onAddCategor
 function SalarioModal({ initial, onSave, onClose }) {
   const [valor, setValor] = useState(initial || 0);
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center px-4" style={{ background: "rgba(28,43,36,0.35)" }} onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center px-4" style={{ background: "var(--overlay)" }} onClick={onClose}>
       <div className="w-full max-w-xs rounded-2xl p-5" style={{ background: SURFACE }} onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
           <h3 className="font-serif-app text-lg" style={{ color: INK }}>Salário base do mês</h3>
-          <button onClick={onClose}><I.X className="w-4 h-4" style={{ color: "#8A9587" }} /></button>
+          <button onClick={onClose}><I.X className="w-4 h-4" style={{ color: "var(--muted-2)" }} /></button>
         </div>
         <input type="number" step="0.01" min="0" value={valor} onChange={(e) => setValor(e.target.value)} className="w-full text-center text-2xl font-mono-app rounded-lg border py-2 mb-4 outline-none text-base sm:text-2xl" style={{ borderColor: LINE, color: GREEN }} />
         <button onClick={() => onSave(Number(valor))} className="w-full py-2.5 rounded-lg text-sm font-medium text-white" style={{ background: GREEN }}>Salvar</button>
@@ -409,23 +485,23 @@ function SalarioModal({ initial, onSave, onClose }) {
    Expense table
 ----------------------------------------------------------------*/
 function ExpenseTable({ rows, kind, onEdit, onDelete, sign = -1, color = BRICK, emptyLabel = "Nenhuma despesa lançada neste mês." }) {
-  if (rows.length === 0) return <div className="py-10 text-center text-sm" style={{ color: "#9CA89C" }}>{emptyLabel}</div>;
+  if (rows.length === 0) return <div className="py-10 text-center text-sm" style={{ color: "var(--muted-4)" }}>{emptyLabel}</div>;
   const sorted = [...rows].sort((a, b) => (a.data || "").localeCompare(b.data || ""));
   const gridCols = kind === "variavel" ? "3.2rem 1fr 5rem 6rem 2.5rem" : "3.2rem 1fr 6rem 2.5rem";
   return (
     <div className="overflow-x-auto -mx-1 px-1">
       <div style={{ minWidth: kind === "variavel" ? 400 : 0 }}>
-        <div className="grid text-[11px] uppercase tracking-wide font-medium pb-2 mb-1" style={{ color: "#8A9587", borderBottom: `1px solid ${LINE}`, gridTemplateColumns: gridCols }}>
+        <div className="grid text-[11px] uppercase tracking-wide font-medium pb-2 mb-1" style={{ color: "var(--muted-2)", borderBottom: `1px solid ${LINE}`, gridTemplateColumns: gridCols }}>
           <span>Data</span><span>Nome</span>{kind === "variavel" && <span>Categoria</span>}<span className="text-right">Valor</span><span />
         </div>
         {sorted.map((r) => (
           <div key={r.id} className="grid items-center py-2 text-sm" style={{ borderBottom: `1px dashed ${LINE}`, gridTemplateColumns: gridCols }}>
-            <span className="text-xs" style={{ color: "#7C8A7C" }}>{r.data ? r.data.slice(8, 10) + "/" + r.data.slice(5, 7) : ""}</span>
+            <span className="text-xs" style={{ color: "var(--muted-1)" }}>{r.data ? r.data.slice(8, 10) + "/" + r.data.slice(5, 7) : ""}</span>
             <span className="truncate pr-2" style={{ color: INK }}>{r.nome}</span>
-            {kind === "variavel" && <span className="text-xs px-2 py-0.5 rounded-full w-fit truncate" style={{ background: BG, color: "#5C6A5F" }}>{r.categoria}</span>}
+            {kind === "variavel" && <span className="text-xs px-2 py-0.5 rounded-full w-fit truncate" style={{ background: BG, color: "var(--muted-3)" }}>{r.categoria}</span>}
             <LedgerNumber value={sign * r.valor} className="text-right text-sm" color={color} />
             <div className="flex justify-end gap-2">
-              <button onClick={() => onEdit(r)}><I.Pencil className="w-3.5 h-3.5" style={{ color: "#8A9587" }} /></button>
+              <button onClick={() => onEdit(r)}><I.Pencil className="w-3.5 h-3.5" style={{ color: "var(--muted-2)" }} /></button>
               <button onClick={() => onDelete(r.id)}><I.Trash className="w-3.5 h-3.5" style={{ color: BRICK }} /></button>
             </div>
           </div>
@@ -489,7 +565,7 @@ function OrcamentoPage({ data, setData }) {
             <div className="flex rounded-lg p-1 overflow-x-auto" style={{ background: BG }}>
               {[["receita", "Receita"], ["fixa", "Despesa fixa"], ["variavel", "Despesa variável"]].map(([k, label]) => (
                 <button key={k} onClick={() => setTab(k)} className="px-3 py-1.5 text-xs sm:text-sm rounded-md font-medium transition whitespace-nowrap"
-                  style={tab === k ? { background: SURFACE, color: INK, boxShadow: "0 1px 2px rgba(0,0,0,0.06)" } : { color: "#7C8A7C" }}>{label}</button>
+                  style={tab === k ? { background: SURFACE, color: INK, boxShadow: "0 1px 2px rgba(0,0,0,0.06)" } : { color: "var(--muted-1)" }}>{label}</button>
               ))}
             </div>
             <button onClick={() => setModal({ kind: tab === "receita" ? "extra" : tab })} className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg text-white shrink-0" style={{ background: GREEN }}><I.Plus className="w-3.5 h-3.5" /> Adicionar</button>
@@ -497,19 +573,19 @@ function OrcamentoPage({ data, setData }) {
           {tab === "receita" && (
             <div className="mb-4 flex items-center justify-between gap-3 flex-wrap">
               <div>
-                <p className="text-xs mb-1" style={{ color: "#7C8A7C" }}>Salário base</p>
+                <p className="text-xs mb-1" style={{ color: "var(--muted-1)" }}>Salário base</p>
                 <LedgerNumber value={data.salario} className="text-2xl font-semibold" color={GREEN} />
               </div>
               <button onClick={() => setSalarioOpen(true)} className="text-xs font-medium px-3 py-1.5 rounded-lg" style={{ background: BG, color: INK }}>Editar salário</button>
             </div>
           )}
-          {tab === "receita" && <p className="text-xs font-medium uppercase tracking-wide mb-1" style={{ color: "#8A9587" }}>Receitas extras</p>}
+          {tab === "receita" && <p className="text-xs font-medium uppercase tracking-wide mb-1" style={{ color: "var(--muted-2)" }}>Receitas extras</p>}
           {tab === "receita" && <ExpenseTable rows={data.extras} kind="extra" sign={1} color={GREEN} emptyLabel="Nenhuma receita extra lançada neste mês." onEdit={(r) => setModal({ kind: "extra", initial: r })} onDelete={(id) => deleteExpense("extra", id)} />}
           {tab === "fixa" && <ExpenseTable rows={data.fixas} kind="fixa" onEdit={(r) => setModal({ kind: "fixa", initial: r })} onDelete={(id) => deleteExpense("fixa", id)} />}
           {tab === "variavel" && <ExpenseTable rows={data.variaveis} kind="variavel" onEdit={(r) => setModal({ kind: "variavel", initial: r })} onDelete={(id) => deleteExpense("variavel", id)} />}
         </div>
         <div className="rounded-xl p-5" style={{ background: SURFACE, border: `1px solid ${LINE}` }}>
-          <p className="text-xs font-medium uppercase tracking-wide mb-1" style={{ color: "#8A9587" }}>{tab === "fixa" ? "Despesas fixas" : tab === "variavel" ? "Despesas variáveis" : "Salário x Extras"}</p>
+          <p className="text-xs font-medium uppercase tracking-wide mb-1" style={{ color: "var(--muted-2)" }}>{tab === "fixa" ? "Despesas fixas" : tab === "variavel" ? "Despesas variáveis" : "Salário x Extras"}</p>
           <Donut items={donutItems} /><Legend items={donutItems} />
         </div>
       </div>
@@ -522,25 +598,12 @@ function OrcamentoPage({ data, setData }) {
 /* ---------------------------------------------------------------
    Visão geral page
 ----------------------------------------------------------------*/
-function VisaoGeralPage({ uidStr, currentData, monthKeyStr, investimentos }) {
-  const [totals, setTotals] = useState({ patrimonio: 0, loading: true });
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const months = await loadAllMonths(uidStr);
-      let patrimonio = 0;
-      months.forEach((val) => { patrimonio += receitaTotal(val) - despesasTotal(val); });
-      if (!cancelled) setTotals({ patrimonio, loading: false });
-    })();
-    return () => { cancelled = true; };
-  }, [uidStr, monthKeyStr, currentData]);
-
-  const totalInvestido = investimentos.reduce((s, a) => s + a.valor, 0);
+function VisaoGeralPage({ currentData, totalInvestido, patrimonio, patrimonioLoading }) {
   const receitaMes = receitaTotal(currentData);
   const despesasMes = despesasTotal(currentData);
   const metaPct = receitaMes > 0 ? Math.min(100, Math.round((despesasMes / receitaMes) * 100)) : 0;
   const cards = [
-    { label: "Patrimônio acumulado", value: totals.patrimonio, bg: GREEN, hint: "Receitas menos despesas de todo o histórico", loading: totals.loading },
+    { label: "Patrimônio acumulado", value: patrimonio, bg: GREEN, hint: "Receitas menos despesas de todo o histórico", loading: patrimonioLoading },
     { label: "Total investido", value: totalInvestido, bg: NAVY, hint: totalInvestido > 0 ? "Seu dinheiro trabalhando" : "Comece a investir. Faça seu dinheiro render." },
     { label: "Despesas do mês", value: despesasMes, bg: BRICK, hint: `${metaPct}% da receita`, progress: metaPct },
   ];
@@ -554,6 +617,131 @@ function VisaoGeralPage({ uidStr, currentData, monthKeyStr, investimentos }) {
           {typeof c.progress === "number" && <div className="absolute bottom-0 left-0 h-1 bg-white/90" style={{ width: `${c.progress}%` }} />}
         </div>
       ))}
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------
+   Meta page
+----------------------------------------------------------------*/
+function MetaModal({ initial, onSave, onClose }) {
+  const [valor, setValor] = useState(initial || 0);
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center px-4" style={{ background: "var(--overlay)" }} onClick={onClose}>
+      <div className="w-full max-w-xs rounded-2xl p-5" style={{ background: SURFACE }} onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="font-serif-app text-lg" style={{ color: INK }}>Meta de patrimônio</h3>
+          <button onClick={onClose}><I.X className="w-4 h-4" style={{ color: "var(--muted-2)" }} /></button>
+        </div>
+        <p className="text-xs mb-3" style={{ color: "var(--muted-1)" }}>Quanto você quer ter guardado no total (patrimônio + investido).</p>
+        <input type="number" step="0.01" min="0" value={valor} onChange={(e) => setValor(e.target.value)} className="w-full text-center text-2xl font-mono-app rounded-lg border py-2 mb-4 outline-none text-base sm:text-2xl" style={{ borderColor: LINE, color: NAVY }} />
+        <button onClick={() => onSave(Number(valor))} className="w-full py-2.5 rounded-lg text-sm font-medium text-white" style={{ background: GREEN }}>Salvar</button>
+      </div>
+    </div>
+  );
+}
+function MetaPage({ valor, onSave, totalGuardado }) {
+  const [open, setOpen] = useState(false);
+  const pct = valor > 0 ? Math.min(100, Math.round((totalGuardado / valor) * 100)) : 0;
+  const atingida = valor > 0 && totalGuardado >= valor;
+  return (
+    <div className="rounded-xl p-6" style={{ background: SURFACE, border: `1px solid ${LINE}` }}>
+      <div className="flex items-center justify-between mb-5 flex-wrap gap-3">
+        <p className="text-sm font-medium" style={{ color: INK }}>Sua meta de patrimônio</p>
+        <button onClick={() => setOpen(true)} className="text-xs font-medium px-3 py-1.5 rounded-lg" style={{ background: BG, color: INK }}>{valor > 0 ? "Editar meta" : "Definir meta"}</button>
+      </div>
+      {valor > 0 ? (
+        <>
+          <div className="flex items-end justify-between mb-2 flex-wrap gap-2">
+            <LedgerNumber value={totalGuardado} className="text-3xl font-semibold" color={atingida ? GREEN : INK} />
+            <span className="text-sm flex items-center gap-1" style={{ color: "var(--muted-1)" }}>de <LedgerNumber value={valor} className="text-sm font-medium" color={NAVY} /></span>
+          </div>
+          <div className="w-full h-3 rounded-full overflow-hidden" style={{ background: BG }}>
+            <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, background: atingida ? GREEN : NAVY }} />
+          </div>
+          <p className="text-xs mt-2" style={{ color: "var(--muted-1)" }}>{pct}% da meta {atingida ? "— parabéns, meta batida! 🎉" : "alcançado"}</p>
+        </>
+      ) : (
+        <p className="text-sm text-center py-10" style={{ color: "var(--muted-4)" }}>Defina quanto você quer juntar pra acompanhar seu progresso aqui.</p>
+      )}
+      {open && <MetaModal initial={valor} onSave={(v) => { onSave(v); setOpen(false); }} onClose={() => setOpen(false)} />}
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------
+   Month picker popover
+----------------------------------------------------------------*/
+function MonthPicker({ value, onChange, onClose }) {
+  const [y] = value.split("-").map(Number);
+  const [viewYear, setViewYear] = useState(y);
+  return (
+    <>
+      <div className="fixed inset-0 z-30" onClick={onClose} />
+      <div className="absolute right-0 top-full mt-2 z-40 rounded-xl p-3 w-60" style={{ background: SURFACE, border: `1px solid ${LINE}`, boxShadow: "0 8px 24px rgba(0,0,0,0.18)" }} onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-2">
+          <button onClick={() => setViewYear((v) => v - 1)}><I.ChevLeft className="w-4 h-4" style={{ color: "var(--muted-1)" }} /></button>
+          <span className="text-sm font-medium" style={{ color: INK }}>{viewYear}</span>
+          <button onClick={() => setViewYear((v) => v + 1)}><I.ChevRight className="w-4 h-4" style={{ color: "var(--muted-1)" }} /></button>
+        </div>
+        <div className="grid grid-cols-3 gap-1.5">
+          {MESES.map((mes, i) => {
+            const key = `${viewYear}-${String(i + 1).padStart(2, "0")}`;
+            const active = key === value;
+            return (
+              <button key={mes} onClick={() => { onChange(key); onClose(); }} className="text-xs py-1.5 rounded-lg font-medium transition"
+                style={active ? { background: GREEN, color: "#fff" } : { color: INK, background: BG }}>
+                {mes.slice(0, 3)}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </>
+  );
+}
+
+/* ---------------------------------------------------------------
+   Usuários (admin) page
+----------------------------------------------------------------*/
+function UsuariosPage() {
+  const [state, setState] = useState({ loading: true, error: null, users: [] });
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const users = await loadAllProfiles();
+        users.sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
+        if (!cancelled) setState({ loading: false, error: null, users });
+      } catch (err) {
+        if (!cancelled) setState({ loading: false, error: err.message || "Erro ao carregar", users: [] });
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  return (
+    <div className="rounded-xl p-5" style={{ background: SURFACE, border: `1px solid ${LINE}` }}>
+      <p className="text-sm font-medium mb-4" style={{ color: INK }}>Contas cadastradas</p>
+      {state.loading ? (
+        <div className="flex justify-center py-10"><I.Spinner className="w-5 h-5 animate-spin" style={{ color: GREEN }} /></div>
+      ) : state.error ? (
+        <p className="text-sm py-6 text-center" style={{ color: BRICK }}>Não foi possível carregar a lista ({state.error}). As regras do Firestore podem ainda não permitir essa leitura.</p>
+      ) : state.users.length === 0 ? (
+        <p className="text-sm py-6 text-center" style={{ color: "var(--muted-4)" }}>Nenhuma conta encontrada.</p>
+      ) : (
+        <div>
+          <div className="grid text-[11px] uppercase tracking-wide font-medium pb-2 mb-1" style={{ color: "var(--muted-2)", borderBottom: `1px solid ${LINE}`, gridTemplateColumns: "1fr 8rem" }}>
+            <span>E-mail</span><span>Cadastro</span>
+          </div>
+          {state.users.map((u, i) => (
+            <div key={i} className="grid items-center py-2 text-sm" style={{ borderBottom: `1px dashed ${LINE}`, gridTemplateColumns: "1fr 8rem" }}>
+              <span className="truncate pr-2" style={{ color: INK }}>{u.email}</span>
+              <span className="text-xs" style={{ color: "var(--muted-1)" }}>{u.createdAt ? u.createdAt.slice(0, 10).split("-").reverse().join("/") : "—"}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -594,8 +782,9 @@ function InvestimentosPage({ investimentos, setInvestimentos }) {
 /* ---------------------------------------------------------------
    App shell
 ----------------------------------------------------------------*/
-const PAGE_TITLES = { orcamento: "Orçamento", investimentos: "Investimentos", visaogeral: "Visão geral" };
-function MainApp({ user }) {
+const PAGE_TITLES = { orcamento: "Orçamento", investimentos: "Investimentos", meta: "Meta", visaogeral: "Visão geral", usuarios: "Usuários" };
+const ADMIN_EMAIL = "yan@gmail.com";
+function MainApp({ user, theme, onToggleTheme }) {
   const [page, setPage] = useState("orcamento");
   const [mKey, setMKey] = useState(monthKey(new Date()));
   const [data, setData] = useState(emptyMonthData());
@@ -604,6 +793,15 @@ function MainApp({ user }) {
   const [investimentos, setInvestimentos] = useState([]);
   const [investLoading, setInvestLoading] = useState(true);
   const investSaveTimer = useRef(null);
+  const [meta, setMeta] = useState(0);
+  const [metaLoading, setMetaLoading] = useState(true);
+  const metaSaveTimer = useRef(null);
+  const [patrimonio, setPatrimonio] = useState(0);
+  const [patrimonioLoading, setPatrimonioLoading] = useState(true);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const isAdmin = user.email === ADMIN_EMAIL;
+
+  useEffect(() => { ensureProfile(user.uid, user.email); }, [user.uid, user.email]);
 
   useEffect(() => {
     let cancelled = false;
@@ -644,39 +842,95 @@ function MainApp({ user }) {
     return () => clearTimeout(investSaveTimer.current);
   }, [investimentos, investLoading, user.uid]);
 
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const valor = await loadMeta(user.uid);
+      if (!cancelled) { setMeta(valor); setMetaLoading(false); }
+    })();
+    return () => { cancelled = true; };
+  }, [user.uid]);
+
+  useEffect(() => {
+    if (metaLoading) return;
+    clearTimeout(metaSaveTimer.current);
+    metaSaveTimer.current = setTimeout(() => { saveMeta(user.uid, meta); }, 500);
+    return () => clearTimeout(metaSaveTimer.current);
+  }, [meta, metaLoading, user.uid]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setPatrimonioLoading(true);
+    (async () => {
+      const months = await loadAllMonths(user.uid);
+      let total = 0;
+      months.forEach((val) => { total += receitaTotal(val) - despesasTotal(val); });
+      if (!cancelled) { setPatrimonio(total); setPatrimonioLoading(false); }
+    })();
+    return () => { cancelled = true; };
+  }, [user.uid, mKey, data]);
+
   const setDataSafe = useCallback((updater) => setData((prev) => (typeof updater === "function" ? updater(prev) : updater)), []);
   const setInvestimentosSafe = useCallback((updater) => setInvestimentos((prev) => (typeof updater === "function" ? updater(prev) : updater)), []);
+  const totalInvestido = investimentos.reduce((s, a) => s + a.valor, 0);
+  const totalGuardado = patrimonio + totalInvestido;
+
+  const TABS = [
+    ["orcamento", "Orçamento", I.List],
+    ["investimentos", "Investimentos", I.Piggy],
+    ["meta", "Meta", I.Target],
+    ["visaogeral", "Visão geral", I.Trend],
+    ...(isAdmin ? [["usuarios", "Usuários", I.Users]] : []),
+  ];
 
   return (
     <div className="min-h-screen w-full" style={{ background: BG }}>
       <div className="max-w-5xl mx-auto px-4 sm:px-6 py-6">
-        <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
+        <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
           <div className="min-w-0">
-            <p className="text-xs truncate" style={{ color: "#7C8A7C" }}>Olá, {user.email}</p>
+            <p className="text-xs truncate" style={{ color: "var(--muted-1)" }}>Olá, {user.email}</p>
             <h1 className="text-xl font-serif-app" style={{ color: INK }}>{PAGE_TITLES[page]}</h1>
           </div>
           <div className="flex items-center gap-2">
-            {page !== "investimentos" && (
-              <div className="flex items-center gap-1 rounded-lg border px-2 py-1.5" style={{ borderColor: LINE, background: SURFACE }}>
-                <button onClick={() => setMKey((k) => shiftMonth(k, -1))}><I.ChevLeft className="w-4 h-4" style={{ color: "#7C8A7C" }} /></button>
-                <span className="text-xs font-medium px-1 w-24 sm:w-28 text-center" style={{ color: INK }}>{monthLabel(mKey)}</span>
-                <button onClick={() => setMKey((k) => shiftMonth(k, 1))}><I.ChevRight className="w-4 h-4" style={{ color: "#7C8A7C" }} /></button>
+            {page !== "investimentos" && page !== "meta" && page !== "usuarios" && (
+              <div className="relative">
+                <div className="flex items-center gap-1 rounded-lg border px-2 py-1.5" style={{ borderColor: LINE, background: SURFACE }}>
+                  <button onClick={() => setMKey((k) => shiftMonth(k, -1))}><I.ChevLeft className="w-4 h-4" style={{ color: "var(--muted-1)" }} /></button>
+                  <button onClick={() => setPickerOpen((o) => !o)} className="flex items-center gap-1 px-1">
+                    <I.Calendar className="w-3.5 h-3.5" style={{ color: "var(--muted-2)" }} />
+                    <span className="text-xs font-medium w-24 sm:w-28 text-center whitespace-nowrap" style={{ color: INK }}>{monthLabel(mKey)}</span>
+                  </button>
+                  <button onClick={() => setMKey((k) => shiftMonth(k, 1))}><I.ChevRight className="w-4 h-4" style={{ color: "var(--muted-1)" }} /></button>
+                </div>
+                {pickerOpen && (
+                  <MonthPicker value={mKey} onChange={setMKey} onClose={() => setPickerOpen(false)} />
+                )}
               </div>
             )}
-            <button onClick={() => fb().signOut(fb().auth)} className="p-2 rounded-lg border shrink-0" style={{ borderColor: LINE, background: SURFACE }}><I.Logout className="w-4 h-4" style={{ color: "#7C8A7C" }} /></button>
+            <ThemeToggle theme={theme} onToggle={onToggleTheme} />
+            <button onClick={() => fb().signOut(fb().auth)} className="p-2 rounded-lg border shrink-0" style={{ borderColor: LINE, background: SURFACE }}><I.Logout className="w-4 h-4" style={{ color: "var(--muted-1)" }} /></button>
           </div>
         </div>
-        <div className="flex gap-1 mb-6 rounded-lg p-1 w-fit max-w-full overflow-x-auto" style={{ background: "#E2E9DE" }}>
-          {[["orcamento", "Orçamento", I.List], ["investimentos", "Investimentos", I.Piggy], ["visaogeral", "Visão geral", I.Trend]].map(([k, label, IconComp]) => (
+        <div className="rounded-xl p-4 mb-6 flex items-center justify-between" style={{ background: SURFACE, border: `1px solid ${LINE}` }}>
+          <div className="flex items-center gap-2">
+            <I.Piggy className="w-4 h-4" style={{ color: NAVY }} />
+            <span className="text-[11px] sm:text-xs uppercase tracking-wide font-medium" style={{ color: "var(--muted-1)" }}>Total guardado</span>
+          </div>
+          {patrimonioLoading ? <I.Spinner className="w-4 h-4 animate-spin" style={{ color: GREEN }} /> : <LedgerNumber value={totalGuardado} className="text-lg font-semibold" color={GREEN} />}
+        </div>
+        <div className="flex gap-1 mb-6 rounded-lg p-1 w-fit max-w-full overflow-x-auto" style={{ background: "var(--tab-bg)" }}>
+          {TABS.map(([k, label, IconComp]) => (
             <button key={k} onClick={() => setPage(k)} className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs sm:text-sm rounded-md font-medium transition whitespace-nowrap"
-              style={page === k ? { background: SURFACE, color: INK, boxShadow: "0 1px 2px rgba(0,0,0,0.08)" } : { color: "#6B7A67" }}>
+              style={page === k ? { background: SURFACE, color: INK, boxShadow: "0 1px 2px rgba(0,0,0,0.08)" } : { color: "var(--muted-5)" }}>
               <IconComp className="w-3.5 h-3.5" />{label}
             </button>
           ))}
         </div>
         {page === "orcamento" && (loading ? <div className="flex justify-center py-20"><I.Spinner className="w-6 h-6 animate-spin" style={{ color: GREEN }} /></div> : <OrcamentoPage data={data} setData={setDataSafe} />)}
         {page === "investimentos" && (investLoading ? <div className="flex justify-center py-20"><I.Spinner className="w-6 h-6 animate-spin" style={{ color: GREEN }} /></div> : <InvestimentosPage investimentos={investimentos} setInvestimentos={setInvestimentosSafe} />)}
-        {page === "visaogeral" && (loading ? <div className="flex justify-center py-20"><I.Spinner className="w-6 h-6 animate-spin" style={{ color: GREEN }} /></div> : <VisaoGeralPage uidStr={user.uid} currentData={data} monthKeyStr={mKey} investimentos={investimentos} />)}
+        {page === "meta" && (metaLoading ? <div className="flex justify-center py-20"><I.Spinner className="w-6 h-6 animate-spin" style={{ color: GREEN }} /></div> : <MetaPage valor={meta} onSave={setMeta} totalGuardado={totalGuardado} />)}
+        {page === "visaogeral" && (loading ? <div className="flex justify-center py-20"><I.Spinner className="w-6 h-6 animate-spin" style={{ color: GREEN }} /></div> : <VisaoGeralPage currentData={data} totalInvestido={totalInvestido} patrimonio={patrimonio} patrimonioLoading={patrimonioLoading} />)}
+        {page === "usuarios" && isAdmin && <UsuariosPage />}
       </div>
     </div>
   );
@@ -686,6 +940,10 @@ function App() {
   const [ready, setReady] = useState(!!window.__firebase);
   const [user, setUser] = useState(null);
   const [checking, setChecking] = useState(true);
+  const [theme, setTheme] = useState(getStoredTheme);
+
+  useEffect(() => { applyTheme(theme); }, [theme]);
+  const toggleTheme = useCallback(() => setTheme((t) => (t === "dark" ? "light" : "dark")), []);
 
   useEffect(() => {
     if (window.__firebase) { setReady(true); return; }
@@ -704,7 +962,7 @@ function App() {
   if (!ready || checking) {
     return <div className="min-h-screen w-full flex items-center justify-center" style={{ background: BG }}><I.Spinner className="w-6 h-6 animate-spin" style={{ color: GREEN }} /></div>;
   }
-  return user ? <MainApp user={user} /> : <AuthScreen />;
+  return user ? <MainApp user={user} theme={theme} onToggleTheme={toggleTheme} /> : <AuthScreen theme={theme} onToggleTheme={toggleTheme} />;
 }
 
 ReactDOM.createRoot(document.getElementById("root")).render(<App />);
