@@ -87,7 +87,8 @@ const GOLD = "var(--gold)";
 const LINE = "var(--line)";
 const PALETTE = [GOLD, NAVY, "#5C8A76", BRICK, "#7C6FA8", "#4C7A96", "#C97B3D", "#8A9A5B"];
 const MESES = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
-const DEFAULT_CATEGORIES = ["Moradia","Contas","Carro","Saúde","Exercício","Viagens","Reserva de Emergência"];
+const DEFAULT_CATEGORIES = ["Moradia","Contas","Assinaturas e Serviços","Alimentação","Bares e Restaurantes","Transporte","Carro","Casa","Saúde","Pet","Imposto","Compras","TV","Internet","Telefone","Viagem","Lazer","Educação","Exercício","Reserva de Emergência"];
+const BANCOS = ["Nubank","Inter","Itaú","Bradesco","Santander","Banco do Brasil","Caixa","C6 Bank","XP","BTG Pactual","PicPay","Mercado Pago","Will Bank","Neon","Next","Outro"];
 
 function fmtBRL(v) {
   const n = Number(v) || 0;
@@ -164,13 +165,15 @@ const I = {
   Target: (p) => <Icon {...p} path='<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1" fill="currentColor"/>' />,
   Calendar: (p) => <Icon {...p} path='<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 10h18"/>' />,
   Users: (p) => <Icon {...p} path='<circle cx="9" cy="8" r="3"/><path d="M2 20c0-3.3 3.1-5 7-5s7 1.7 7 5"/><circle cx="17" cy="8" r="2.6"/><path d="M16 4.2c1.2.3 2 1.4 2 2.8s-.8 2.5-2 2.8"/><path d="M18 15.3c2.3.4 4 1.7 4 4.7"/>' />,
+  CreditCard: (p) => <Icon {...p} path='<rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/><path d="M6 15h4"/>' />,
+  HandCoins: (p) => <Icon {...p} path='<path d="M3 14c2 1 4 1.5 6 1.5h3a1.5 1.5 0 0 0 0-3H9"/><path d="M3 11l3-2c1-.7 2-1 3.3-1H15c1.5 0 3 .6 4 1.7l2 2.3"/><circle cx="16" cy="6" r="3"/><path d="M2 14v5M8 21l-3-1.5-3 1V15"/>' />,
 };
 
 /* ---------------------------------------------------------------
    Firestore helpers
 ----------------------------------------------------------------*/
 function fb() { return window.__firebase; }
-const RESERVED_MONTH_KEYS = new Set(["_investimentos", "_profile", "_meta"]);
+const RESERVED_MONTH_KEYS = new Set(["_investimentos", "_profile", "_meta", "_recebiveis", "_cartoes"]);
 // Legacy docs stored a flat `receita` number; new docs split it into salario + extras.
 function migrateMonth(raw) {
   if (!raw) return raw;
@@ -195,8 +198,8 @@ async function loadAllMonths(uidStr) {
   const colRef = f.collection(f.db, "users", uidStr, "months");
   const snap = await f.getDocs(colRef);
   const out = [];
-  // "_investimentos"/"_profile"/"_meta" are reserved keys in this same collection — not real months.
-  snap.forEach((d) => { if (!RESERVED_MONTH_KEYS.has(d.id)) out.push(migrateMonth(d.data())); });
+  // "_investimentos"/"_profile"/"_meta"/... are reserved keys in this same collection — not real months.
+  snap.forEach((d) => { if (!RESERVED_MONTH_KEYS.has(d.id)) out.push({ key: d.id, ...migrateMonth(d.data()) }); });
   return out;
 }
 async function loadInvestimentos(uidStr) {
@@ -240,6 +243,36 @@ async function saveMeta(uidStr, valor) {
   const f = fb();
   const ref = f.doc(f.db, "users", uidStr, "months", "_meta");
   await f.setDoc(ref, { valor }, { merge: false });
+}
+async function loadRecebiveis(uidStr) {
+  const f = fb();
+  const ref = f.doc(f.db, "users", uidStr, "months", "_recebiveis");
+  const snap = await f.getDoc(ref);
+  return snap.exists ? (snap.data().items || []) : [];
+}
+async function saveRecebiveis(uidStr, items) {
+  const f = fb();
+  const ref = f.doc(f.db, "users", uidStr, "months", "_recebiveis");
+  await f.setDoc(ref, { items }, { merge: false });
+}
+async function loadCartoes(uidStr) {
+  const f = fb();
+  const ref = f.doc(f.db, "users", uidStr, "months", "_cartoes");
+  const snap = await f.getDoc(ref);
+  return snap.exists ? (snap.data().cartoes || []) : [];
+}
+async function saveCartoes(uidStr, cartoes) {
+  const f = fb();
+  const ref = f.doc(f.db, "users", uidStr, "months", "_cartoes");
+  await f.setDoc(ref, { cartoes }, { merge: false });
+}
+// Writes a single installment's document directly into a future month that isn't the currently-loaded one.
+async function addExpenseToMonth(uidStr, monthKeyStr, kind, item) {
+  const listKey = kind === "fixa" ? "fixas" : "variaveis";
+  const stored = await loadMonth(uidStr, monthKeyStr);
+  const monthData = stored ? { ...emptyMonthData(), ...stored } : emptyMonthData();
+  monthData[listKey] = [...monthData[listKey], item];
+  await saveMonth(uidStr, monthKeyStr, monthData);
 }
 
 /* ---------------------------------------------------------------
@@ -407,19 +440,33 @@ const KIND_META = {
   variavel: { article: "Nova", noun: "despesa variável" },
   extra: { article: "Nova", noun: "receita extra" },
   aporte: { article: "Novo", noun: "aporte" },
+  receber: { article: "Nova", noun: "conta a receber" },
 };
-function ExpenseModal({ kind, initial, categorias, onSave, onClose, onAddCategoria }) {
+function ExpenseModal({ kind, initial, categorias, cartoes, onSave, onClose, onAddCategoria }) {
+  const isDespesa = kind === "fixa" || kind === "variavel";
   const [nome, setNome] = useState(initial?.nome || "");
   const [valor, setValor] = useState(initial?.valor ?? "");
   const [data, setData] = useState(initial?.data || new Date().toISOString().slice(0, 10));
   const [categoria, setCategoria] = useState(initial?.categoria || "");
   const [novaCategoria, setNovaCategoria] = useState("");
   const [addingCat, setAddingCat] = useState(false);
+  const [cartaoId, setCartaoId] = useState(initial?.cartaoId || "");
+  const [pagamento, setPagamento] = useState("avista");
+  const [parcelas, setParcelas] = useState(2);
 
   function submit(e) {
     e.preventDefault();
     if (!nome.trim() || !valor) return;
-    onSave({ id: initial?.id || uid(), nome: nome.trim(), valor: Number(valor), data, ...(kind === "variavel" ? { categoria: categoria || "Outros" } : {}) });
+    const base = {
+      id: initial?.id || uid(), nome: nome.trim(), valor: Number(valor), data,
+      ...(kind === "variavel" ? { categoria: categoria || "Outros" } : {}),
+      ...(isDespesa && cartaoId ? { cartaoId } : {}),
+    };
+    if (!initial && isDespesa && pagamento === "parcelado" && Number(parcelas) > 1) {
+      onSave({ ...base, installments: Number(parcelas) });
+    } else {
+      onSave(base);
+    }
   }
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center px-4" style={{ background: "var(--overlay)" }} onClick={onClose}>
@@ -438,7 +485,7 @@ function ExpenseModal({ kind, initial, categorias, onSave, onClose, onAddCategor
             <input value={nome} onChange={(e) => setNome(e.target.value)} placeholder="Ex: Aluguel" className="w-full mt-1 rounded-lg border px-3 py-2 text-base sm:text-sm outline-none" style={{ borderColor: LINE }} />
           </div>
           <div>
-            <label className="text-xs font-medium" style={{ color: "var(--muted-1)" }}>Valor (R$)</label>
+            <label className="text-xs font-medium" style={{ color: "var(--muted-1)" }}>Valor (R$) {!initial && isDespesa && pagamento === "parcelado" ? "— total da compra" : ""}</label>
             <input type="number" step="0.01" min="0" value={valor} onChange={(e) => setValor(e.target.value)} placeholder="0,00" className="w-full mt-1 rounded-lg border px-3 py-2 text-base sm:text-sm outline-none font-mono-app" style={{ borderColor: LINE }} />
           </div>
           {kind === "variavel" && (
@@ -455,6 +502,36 @@ function ExpenseModal({ kind, initial, categorias, onSave, onClose, onAddCategor
                 <div className="flex gap-2 mt-1">
                   <input value={novaCategoria} onChange={(e) => setNovaCategoria(e.target.value)} placeholder="Nome da categoria" className="flex-1 rounded-lg border px-3 py-2 text-sm outline-none" style={{ borderColor: LINE }} />
                   <button type="button" onClick={() => { if (novaCategoria.trim()) { onAddCategoria(novaCategoria.trim()); setCategoria(novaCategoria.trim()); setNovaCategoria(""); setAddingCat(false); } }} className="px-3 rounded-lg text-sm text-white" style={{ background: GREEN }}>OK</button>
+                </div>
+              )}
+            </div>
+          )}
+          {isDespesa && cartoes && cartoes.length > 0 && (
+            <div>
+              <label className="text-xs font-medium" style={{ color: "var(--muted-1)" }}>Cartão (opcional)</label>
+              <select value={cartaoId} onChange={(e) => setCartaoId(e.target.value)}
+                className="w-full mt-1 rounded-lg border px-3 py-2 text-base sm:text-sm outline-none" style={{ borderColor: LINE, background: SURFACE, color: INK }}>
+                <option value="">Nenhum / dinheiro</option>
+                {cartoes.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}
+              </select>
+            </div>
+          )}
+          {!initial && isDespesa && (
+            <div>
+              <label className="text-xs font-medium" style={{ color: "var(--muted-1)" }}>Pagamento</label>
+              <div className="flex rounded-lg p-1 mt-1" style={{ background: BG }}>
+                {[["avista", "À vista"], ["parcelado", "Parcelado"]].map(([k, label]) => (
+                  <button key={k} type="button" onClick={() => setPagamento(k)} className="flex-1 py-1.5 text-sm rounded-md font-medium transition"
+                    style={pagamento === k ? { background: SURFACE, color: INK, boxShadow: "0 1px 2px rgba(0,0,0,0.06)" } : { color: "var(--muted-1)" }}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+              {pagamento === "parcelado" && (
+                <div className="flex items-center gap-2 mt-2">
+                  <input type="number" min="2" max="60" value={parcelas} onChange={(e) => setParcelas(e.target.value)}
+                    className="w-20 rounded-lg border px-3 py-2 text-base sm:text-sm outline-none font-mono-app text-center" style={{ borderColor: LINE }} />
+                  <span className="text-xs" style={{ color: "var(--muted-1)" }}>vezes de {fmtBRL((Number(valor) || 0) / (Number(parcelas) || 1))}, lançadas nos próximos meses</span>
                 </div>
               )}
             </div>
@@ -515,7 +592,7 @@ function ExpenseTable({ rows, kind, onEdit, onDelete, sign = -1, color = BRICK, 
 /* ---------------------------------------------------------------
    Orçamento page
 ----------------------------------------------------------------*/
-function OrcamentoPage({ data, setData }) {
+function OrcamentoPage({ data, setData, uidStr, mKey, cartoes, onIncrementCartao }) {
   const [tab, setTab] = useState("fixa");
   const [modal, setModal] = useState(null);
   const [salarioOpen, setSalarioOpen] = useState(false);
@@ -528,7 +605,23 @@ function OrcamentoPage({ data, setData }) {
   const saldo = receita - despesas;
 
   const LIST_BY_KIND = { fixa: "fixas", variavel: "variaveis", extra: "extras" };
-  function saveExpense(kind, item) {
+  async function saveExpense(kind, item) {
+    if (item.cartaoId) onIncrementCartao(item.cartaoId, item.valor);
+    if (item.installments > 1) {
+      const parcelaId = uid();
+      const n = item.installments;
+      const per = Math.round((item.valor / n) * 100) / 100;
+      const lastValor = Math.round((item.valor - per * (n - 1)) * 100) / 100;
+      for (let i = 1; i < n; i++) {
+        const monthKeyI = shiftMonth(mKey, i);
+        const valorI = i === n - 1 ? lastValor : per;
+        await addExpenseToMonth(uidStr, monthKeyI, kind, { id: uid(), nome: `${item.nome} (${i + 1}/${n})`, valor: valorI, data: item.data, parcelaId, ...(kind === "variavel" ? { categoria: item.categoria } : {}), ...(item.cartaoId ? { cartaoId: item.cartaoId } : {}) });
+      }
+      const firstItem = { id: item.id, nome: `${item.nome} (1/${n})`, valor: per, data: item.data, parcelaId, ...(kind === "variavel" ? { categoria: item.categoria } : {}), ...(item.cartaoId ? { cartaoId: item.cartaoId } : {}) };
+      setData((d) => ({ ...d, [LIST_BY_KIND[kind]]: [...d[LIST_BY_KIND[kind]], firstItem] }));
+      setModal(null);
+      return;
+    }
     setData((d) => {
       const list = LIST_BY_KIND[kind];
       const arr = d[list];
@@ -589,7 +682,7 @@ function OrcamentoPage({ data, setData }) {
           <Donut items={donutItems} /><Legend items={donutItems} />
         </div>
       </div>
-      {modal && <ExpenseModal kind={modal.kind} initial={modal.initial} categorias={data.categorias} onSave={(item) => saveExpense(modal.kind, item)} onClose={() => setModal(null)} onAddCategoria={addCategoria} />}
+      {modal && <ExpenseModal kind={modal.kind} initial={modal.initial} categorias={data.categorias} cartoes={cartoes} onSave={(item) => saveExpense(modal.kind, item)} onClose={() => setModal(null)} onAddCategoria={addCategoria} />}
       {salarioOpen && <SalarioModal initial={data.salario} onSave={(v) => { setData((d) => ({ ...d, salario: v })); setSalarioOpen(false); }} onClose={() => setSalarioOpen(false)} />}
     </div>
   );
@@ -598,25 +691,67 @@ function OrcamentoPage({ data, setData }) {
 /* ---------------------------------------------------------------
    Visão geral page
 ----------------------------------------------------------------*/
-function VisaoGeralPage({ currentData, totalInvestido, patrimonio, patrimonioLoading }) {
+function BarChart({ data }) {
+  if (data.length === 0) return <div className="h-40 flex items-center justify-center text-sm" style={{ color: "var(--muted-4)" }}>Sem histórico ainda</div>;
+  const max = Math.max(1, ...data.map((d) => Math.max(d.receita, d.despesas)));
+  return (
+    <div className="flex items-end gap-3 h-40 pt-2">
+      {data.map((d) => {
+        const m = Number(d.key.split("-")[1]);
+        return (
+          <div key={d.key} className="flex-1 flex flex-col items-center gap-1 h-full justify-end min-w-0">
+            <div className="w-full flex items-end justify-center gap-1 flex-1">
+              <div className="w-2.5 sm:w-3 rounded-t transition-all" style={{ height: `${Math.max(2, (d.receita / max) * 100)}%`, background: GREEN }} title={`Receita: ${fmtBRL(d.receita)}`} />
+              <div className="w-2.5 sm:w-3 rounded-t transition-all" style={{ height: `${Math.max(2, (d.despesas / max) * 100)}%`, background: BRICK }} title={`Despesas: ${fmtBRL(d.despesas)}`} />
+            </div>
+            <span className="text-[10px] whitespace-nowrap" style={{ color: "var(--muted-1)" }}>{MESES[m - 1].slice(0, 3)}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+function VisaoGeralPage({ currentData, totalInvestido, patrimonio, patrimonioLoading, historico, meta, totalGuardado }) {
   const receitaMes = receitaTotal(currentData);
   const despesasMes = despesasTotal(currentData);
   const metaPct = receitaMes > 0 ? Math.min(100, Math.round((despesasMes / receitaMes) * 100)) : 0;
+  const metaGoalPct = meta > 0 ? Math.min(100, Math.round((totalGuardado / meta) * 100)) : 0;
   const cards = [
     { label: "Patrimônio acumulado", value: patrimonio, bg: GREEN, hint: "Receitas menos despesas de todo o histórico", loading: patrimonioLoading },
     { label: "Total investido", value: totalInvestido, bg: NAVY, hint: totalInvestido > 0 ? "Seu dinheiro trabalhando" : "Comece a investir. Faça seu dinheiro render." },
     { label: "Despesas do mês", value: despesasMes, bg: BRICK, hint: `${metaPct}% da receita`, progress: metaPct },
   ];
   return (
-    <div className="grid sm:grid-cols-3 gap-4">
-      {cards.map((c, i) => (
-        <div key={i} className="rounded-xl p-5 text-white relative overflow-hidden" style={{ background: c.bg, minHeight: 140 }}>
-          <p className="text-[11px] uppercase tracking-wide opacity-80 mb-3">{c.label}</p>
-          {c.loading ? <I.Spinner className="w-5 h-5 animate-spin opacity-80" /> : <LedgerNumber value={c.value} className="text-2xl font-semibold" />}
-          <p className="text-xs opacity-75 mt-2">{c.hint}</p>
-          {typeof c.progress === "number" && <div className="absolute bottom-0 left-0 h-1 bg-white/90" style={{ width: `${c.progress}%` }} />}
+    <div className="space-y-5">
+      <div className="grid sm:grid-cols-3 gap-4">
+        {cards.map((c, i) => (
+          <div key={i} className="rounded-xl p-5 text-white relative overflow-hidden" style={{ background: c.bg, minHeight: 140 }}>
+            <p className="text-[11px] uppercase tracking-wide opacity-80 mb-3">{c.label}</p>
+            {c.loading ? <I.Spinner className="w-5 h-5 animate-spin opacity-80" /> : <LedgerNumber value={c.value} className="text-2xl font-semibold" />}
+            <p className="text-xs opacity-75 mt-2">{c.hint}</p>
+            {typeof c.progress === "number" && <div className="absolute bottom-0 left-0 h-1 bg-white/90" style={{ width: `${c.progress}%` }} />}
+          </div>
+        ))}
+      </div>
+      {meta > 0 && (
+        <div className="rounded-xl p-5" style={{ background: SURFACE, border: `1px solid ${LINE}` }}>
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-xs font-medium uppercase tracking-wide" style={{ color: "var(--muted-2)" }}>Meta de patrimônio</p>
+            <span className="text-xs font-medium" style={{ color: "var(--muted-1)" }}>{metaGoalPct}%</span>
+          </div>
+          <div className="w-full h-2.5 rounded-full overflow-hidden" style={{ background: BG }}>
+            <div className="h-full rounded-full transition-all" style={{ width: `${metaGoalPct}%`, background: totalGuardado >= meta ? GREEN : NAVY }} />
+          </div>
         </div>
-      ))}
+      )}
+      <div className="rounded-xl p-5" style={{ background: SURFACE, border: `1px solid ${LINE}` }}>
+        <p className="text-xs font-medium uppercase tracking-wide mb-3" style={{ color: "var(--muted-2)" }}>Receita x Despesas por mês</p>
+        <BarChart data={historico} />
+        <div className="flex gap-4 mt-3">
+          <div className="flex items-center gap-1.5 text-xs" style={{ color: "var(--muted-1)" }}><span className="w-2 h-2 rounded-full" style={{ background: GREEN }} />Receita</div>
+          <div className="flex items-center gap-1.5 text-xs" style={{ color: "var(--muted-1)" }}><span className="w-2 h-2 rounded-full" style={{ background: BRICK }} />Despesas</div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -780,9 +915,166 @@ function InvestimentosPage({ investimentos, setInvestimentos }) {
 }
 
 /* ---------------------------------------------------------------
+   Contas a receber page
+----------------------------------------------------------------*/
+function RecebiveisPage({ items, setItems }) {
+  const [modal, setModal] = useState(null);
+  const pendente = items.filter((r) => !r.recebido).reduce((s, r) => s + r.valor, 0);
+
+  function saveItem(item) {
+    setItems((list) => {
+      const exists = list.some((r) => r.id === item.id);
+      return exists ? list.map((r) => (r.id === item.id ? { ...r, ...item } : r)) : [...list, { ...item, recebido: false }];
+    });
+    setModal(null);
+  }
+  function deleteItem(id) { setItems((list) => list.filter((r) => r.id !== id)); }
+  function toggleRecebido(id) { setItems((list) => list.map((r) => (r.id === id ? { ...r, recebido: !r.recebido } : r))); }
+  const sorted = [...items].sort((a, b) => (a.recebido === b.recebido ? 0 : a.recebido ? 1 : -1) || (a.data || "").localeCompare(b.data || ""));
+
+  return (
+    <div>
+      <div className="flex flex-wrap gap-3 mb-6">
+        <SummaryCard label="A receber" value={pendente} icon={I.Wallet} color={GOLD} />
+      </div>
+      <div className="rounded-xl p-5" style={{ background: SURFACE, border: `1px solid ${LINE}` }}>
+        <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+          <p className="text-sm font-medium" style={{ color: INK }}>Quem te deve</p>
+          <button onClick={() => setModal({})} className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg text-white" style={{ background: GOLD }}><I.Plus className="w-3.5 h-3.5" /> Adicionar</button>
+        </div>
+        {sorted.length === 0 ? (
+          <div className="py-10 text-center text-sm" style={{ color: "var(--muted-4)" }}>Nenhuma conta a receber lançada.</div>
+        ) : (
+          <div className="overflow-x-auto -mx-1 px-1">
+            <div style={{ minWidth: 420 }}>
+              <div className="grid gap-2 text-[11px] uppercase tracking-wide font-medium pb-2 mb-1" style={{ color: "var(--muted-2)", borderBottom: `1px solid ${LINE}`, gridTemplateColumns: "3.2rem 1fr 6rem 6rem 3rem" }}>
+                <span>Data</span><span>Nome</span><span className="text-right">Valor</span><span>Status</span><span />
+              </div>
+              {sorted.map((r) => (
+                <div key={r.id} className="grid gap-2 items-center py-2 text-sm" style={{ borderBottom: `1px dashed ${LINE}`, gridTemplateColumns: "3.2rem 1fr 6rem 6rem 3rem", opacity: r.recebido ? 0.55 : 1 }}>
+                  <span className="text-xs" style={{ color: "var(--muted-1)" }}>{r.data ? r.data.slice(8, 10) + "/" + r.data.slice(5, 7) : ""}</span>
+                  <span className="truncate pr-2" style={{ color: INK }}>{r.nome}</span>
+                  <LedgerNumber value={r.valor} className="text-right text-sm" color={r.recebido ? "var(--muted-1)" : GOLD} />
+                  <button onClick={() => toggleRecebido(r.id)} className="text-[11px] font-medium px-2 py-0.5 rounded-full w-fit whitespace-nowrap" style={r.recebido ? { background: BG, color: "var(--muted-1)" } : { background: GREEN, color: "#fff" }}>
+                    {r.recebido ? "Recebido" : "Pendente"}
+                  </button>
+                  <div className="flex justify-end gap-2">
+                    <button onClick={() => setModal({ initial: r })}><I.Pencil className="w-3.5 h-3.5" style={{ color: "var(--muted-2)" }} /></button>
+                    <button onClick={() => deleteItem(r.id)}><I.Trash className="w-3.5 h-3.5" style={{ color: BRICK }} /></button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+      {modal && <ExpenseModal kind="receber" initial={modal.initial} categorias={[]} onAddCategoria={() => {}} onSave={saveItem} onClose={() => setModal(null)} />}
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------
+   Cartões page
+----------------------------------------------------------------*/
+function CartaoModal({ initial, onSave, onClose }) {
+  const [nome, setNome] = useState(initial?.nome || "");
+  const [banco, setBanco] = useState(initial?.banco || BANCOS[0]);
+  const [limite, setLimite] = useState(initial?.limite ?? "");
+  function submit(e) {
+    e.preventDefault();
+    if (!nome.trim() || !limite) return;
+    onSave({ id: initial?.id || uid(), nome: nome.trim(), banco, limite: Number(limite), usado: initial?.usado || 0 });
+  }
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center px-4" style={{ background: "var(--overlay)" }} onClick={onClose}>
+      <div className="w-full max-w-sm rounded-2xl p-5" style={{ background: SURFACE }} onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="font-serif-app text-lg" style={{ color: INK }}>{initial ? "Editar" : "Novo"} cartão</h3>
+          <button onClick={onClose}><I.X className="w-4 h-4" style={{ color: "var(--muted-2)" }} /></button>
+        </div>
+        <form onSubmit={submit} className="space-y-3">
+          <div>
+            <label className="text-xs font-medium" style={{ color: "var(--muted-1)" }}>Apelido do cartão</label>
+            <input value={nome} onChange={(e) => setNome(e.target.value)} placeholder="Ex: Nubank Roxinho" className="w-full mt-1 rounded-lg border px-3 py-2 text-base sm:text-sm outline-none" style={{ borderColor: LINE }} />
+          </div>
+          <div>
+            <label className="text-xs font-medium" style={{ color: "var(--muted-1)" }}>Banco</label>
+            <select value={banco} onChange={(e) => setBanco(e.target.value)} className="w-full mt-1 rounded-lg border px-3 py-2 text-base sm:text-sm outline-none" style={{ borderColor: LINE, background: SURFACE, color: INK }}>
+              {BANCOS.map((b) => <option key={b} value={b}>{b}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs font-medium" style={{ color: "var(--muted-1)" }}>Limite (R$)</label>
+            <input type="number" step="0.01" min="0" value={limite} onChange={(e) => setLimite(e.target.value)} placeholder="0,00" className="w-full mt-1 rounded-lg border px-3 py-2 text-base sm:text-sm outline-none font-mono-app" style={{ borderColor: LINE }} />
+          </div>
+          <button type="submit" className="w-full py-2.5 rounded-lg text-sm font-medium text-white mt-1" style={{ background: NAVY }}>Salvar</button>
+        </form>
+      </div>
+    </div>
+  );
+}
+function CartoesPage({ cartoes, setCartoes }) {
+  const [modal, setModal] = useState(null);
+  function saveCartao(item) {
+    setCartoes((list) => {
+      const exists = list.some((r) => r.id === item.id);
+      return exists ? list.map((r) => (r.id === item.id ? { ...item, usado: r.usado } : r)) : [...list, item];
+    });
+    setModal(null);
+  }
+  function deleteCartao(id) { setCartoes((list) => list.filter((r) => r.id !== id)); }
+  function pagarFatura(id) { setCartoes((list) => list.map((r) => (r.id === id ? { ...r, usado: 0 } : r))); }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4">
+        <p className="text-sm font-medium" style={{ color: INK }}>Seus cartões</p>
+        <button onClick={() => setModal({})} className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg text-white" style={{ background: NAVY }}><I.Plus className="w-3.5 h-3.5" /> Novo cartão</button>
+      </div>
+      {cartoes.length === 0 ? (
+        <div className="rounded-xl p-10 text-center text-sm" style={{ background: SURFACE, border: `1px solid ${LINE}`, color: "var(--muted-4)" }}>Nenhum cartão cadastrado ainda.</div>
+      ) : (
+        <div className="grid sm:grid-cols-2 gap-4">
+          {cartoes.map((c) => {
+            const pct = c.limite > 0 ? Math.min(100, Math.round((c.usado / c.limite) * 100)) : 0;
+            const estourado = c.usado > c.limite;
+            return (
+              <div key={c.id} className="rounded-xl p-5" style={{ background: SURFACE, border: `1px solid ${LINE}` }}>
+                <div className="flex items-center justify-between mb-1">
+                  <div>
+                    <p className="text-sm font-medium" style={{ color: INK }}>{c.nome}</p>
+                    <p className="text-xs" style={{ color: "var(--muted-1)" }}>{c.banco}</p>
+                  </div>
+                  <div className="flex gap-2">
+                    <button onClick={() => setModal({ initial: c })}><I.Pencil className="w-3.5 h-3.5" style={{ color: "var(--muted-2)" }} /></button>
+                    <button onClick={() => deleteCartao(c.id)}><I.Trash className="w-3.5 h-3.5" style={{ color: BRICK }} /></button>
+                  </div>
+                </div>
+                <div className="flex items-end justify-between mt-3 mb-1">
+                  <LedgerNumber value={c.usado} className="text-xl font-semibold" color={estourado ? BRICK : INK} />
+                  <span className="text-xs flex items-center gap-1" style={{ color: "var(--muted-1)" }}>de <LedgerNumber value={c.limite} className="text-xs font-medium" color={NAVY} /></span>
+                </div>
+                <div className="w-full h-2.5 rounded-full overflow-hidden" style={{ background: BG }}>
+                  <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, background: estourado ? BRICK : NAVY }} />
+                </div>
+                <div className="flex items-center justify-between mt-2 gap-2">
+                  <p className="text-xs" style={{ color: "var(--muted-1)" }}>{pct}% do limite usado</p>
+                  {c.usado > 0 && <button onClick={() => pagarFatura(c.id)} className="text-[11px] font-medium px-2 py-1 rounded-lg whitespace-nowrap" style={{ background: BG, color: INK }}>Paguei a fatura</button>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {modal && <CartaoModal initial={modal.initial} onSave={saveCartao} onClose={() => setModal(null)} />}
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------
    App shell
 ----------------------------------------------------------------*/
-const PAGE_TITLES = { orcamento: "Orçamento", investimentos: "Investimentos", meta: "Meta", visaogeral: "Visão geral", usuarios: "Usuários" };
+const PAGE_TITLES = { orcamento: "Orçamento", investimentos: "Investimentos", meta: "Meta", visaogeral: "Visão geral", usuarios: "Usuários", recebiveis: "A Receber", cartoes: "Cartões" };
 const ADMIN_EMAIL = "yan@gmail.com";
 function MainApp({ user, theme, onToggleTheme }) {
   const [page, setPage] = useState("orcamento");
@@ -798,7 +1090,14 @@ function MainApp({ user, theme, onToggleTheme }) {
   const metaSaveTimer = useRef(null);
   const [patrimonio, setPatrimonio] = useState(0);
   const [patrimonioLoading, setPatrimonioLoading] = useState(true);
+  const [historico, setHistorico] = useState([]);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [cartoes, setCartoes] = useState([]);
+  const [cartoesLoading, setCartoesLoading] = useState(true);
+  const cartoesSaveTimer = useRef(null);
+  const [recebiveis, setRecebiveis] = useState([]);
+  const [recebiveisLoading, setRecebiveisLoading] = useState(true);
+  const recebiveisSaveTimer = useRef(null);
   const isAdmin = user.email === ADMIN_EMAIL;
 
   useEffect(() => { ensureProfile(user.uid, user.email); }, [user.uid, user.email]);
@@ -863,25 +1162,74 @@ function MainApp({ user, theme, onToggleTheme }) {
     setPatrimonioLoading(true);
     (async () => {
       const months = await loadAllMonths(user.uid);
+      // The current month may not have finished its debounced save yet — use the live local `data` for it instead of the (possibly stale) Firestore copy.
+      const merged = months.some((val) => val.key === mKey)
+        ? months.map((val) => (val.key === mKey ? { key: mKey, ...data } : val))
+        : [...months, { key: mKey, ...data }];
       let total = 0;
-      months.forEach((val) => { total += receitaTotal(val) - despesasTotal(val); });
-      if (!cancelled) { setPatrimonio(total); setPatrimonioLoading(false); }
+      merged.forEach((val) => { total += receitaTotal(val) - despesasTotal(val); });
+      const sorted = [...merged].sort((a, b) => a.key.localeCompare(b.key)).slice(-6);
+      if (!cancelled) {
+        setPatrimonio(total);
+        setPatrimonioLoading(false);
+        setHistorico(sorted.map((val) => ({ key: val.key, receita: receitaTotal(val), despesas: despesasTotal(val) })));
+      }
     })();
     return () => { cancelled = true; };
   }, [user.uid, mKey, data]);
 
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const list = await loadCartoes(user.uid);
+      if (!cancelled) { setCartoes(list); setCartoesLoading(false); }
+    })();
+    return () => { cancelled = true; };
+  }, [user.uid]);
+
+  useEffect(() => {
+    if (cartoesLoading) return;
+    clearTimeout(cartoesSaveTimer.current);
+    cartoesSaveTimer.current = setTimeout(() => { saveCartoes(user.uid, cartoes); }, 500);
+    return () => clearTimeout(cartoesSaveTimer.current);
+  }, [cartoes, cartoesLoading, user.uid]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const list = await loadRecebiveis(user.uid);
+      if (!cancelled) { setRecebiveis(list); setRecebiveisLoading(false); }
+    })();
+    return () => { cancelled = true; };
+  }, [user.uid]);
+
+  useEffect(() => {
+    if (recebiveisLoading) return;
+    clearTimeout(recebiveisSaveTimer.current);
+    recebiveisSaveTimer.current = setTimeout(() => { saveRecebiveis(user.uid, recebiveis); }, 500);
+    return () => clearTimeout(recebiveisSaveTimer.current);
+  }, [recebiveis, recebiveisLoading, user.uid]);
+
   const setDataSafe = useCallback((updater) => setData((prev) => (typeof updater === "function" ? updater(prev) : updater)), []);
   const setInvestimentosSafe = useCallback((updater) => setInvestimentos((prev) => (typeof updater === "function" ? updater(prev) : updater)), []);
+  const setCartoesSafe = useCallback((updater) => setCartoes((prev) => (typeof updater === "function" ? updater(prev) : updater)), []);
+  const setRecebiveisSafe = useCallback((updater) => setRecebiveis((prev) => (typeof updater === "function" ? updater(prev) : updater)), []);
+  const incrementCartao = useCallback((cartaoId, valor) => {
+    setCartoes((list) => list.map((c) => (c.id === cartaoId ? { ...c, usado: (c.usado || 0) + valor } : c)));
+  }, []);
   const totalInvestido = investimentos.reduce((s, a) => s + a.valor, 0);
   const totalGuardado = patrimonio + totalInvestido;
 
   const TABS = [
     ["orcamento", "Orçamento", I.List],
     ["investimentos", "Investimentos", I.Piggy],
+    ["cartoes", "Cartões", I.CreditCard],
+    ["recebiveis", "A Receber", I.HandCoins],
     ["meta", "Meta", I.Target],
     ["visaogeral", "Visão geral", I.Trend],
     ...(isAdmin ? [["usuarios", "Usuários", I.Users]] : []),
   ];
+  const GLOBAL_PAGES = new Set(["investimentos", "meta", "usuarios", "cartoes", "recebiveis"]);
 
   return (
     <div className="min-h-screen w-full" style={{ background: BG }}>
@@ -892,7 +1240,7 @@ function MainApp({ user, theme, onToggleTheme }) {
             <h1 className="text-xl font-serif-app" style={{ color: INK }}>{PAGE_TITLES[page]}</h1>
           </div>
           <div className="flex items-center gap-2">
-            {page !== "investimentos" && page !== "meta" && page !== "usuarios" && (
+            {!GLOBAL_PAGES.has(page) && (
               <div className="relative">
                 <div className="flex items-center gap-1 rounded-lg border px-2 py-1.5" style={{ borderColor: LINE, background: SURFACE }}>
                   <button onClick={() => setMKey((k) => shiftMonth(k, -1))}><I.ChevLeft className="w-4 h-4" style={{ color: "var(--muted-1)" }} /></button>
@@ -926,10 +1274,12 @@ function MainApp({ user, theme, onToggleTheme }) {
             </button>
           ))}
         </div>
-        {page === "orcamento" && (loading ? <div className="flex justify-center py-20"><I.Spinner className="w-6 h-6 animate-spin" style={{ color: GREEN }} /></div> : <OrcamentoPage data={data} setData={setDataSafe} />)}
+        {page === "orcamento" && (loading ? <div className="flex justify-center py-20"><I.Spinner className="w-6 h-6 animate-spin" style={{ color: GREEN }} /></div> : <OrcamentoPage data={data} setData={setDataSafe} uidStr={user.uid} mKey={mKey} cartoes={cartoes} onIncrementCartao={incrementCartao} />)}
         {page === "investimentos" && (investLoading ? <div className="flex justify-center py-20"><I.Spinner className="w-6 h-6 animate-spin" style={{ color: GREEN }} /></div> : <InvestimentosPage investimentos={investimentos} setInvestimentos={setInvestimentosSafe} />)}
+        {page === "cartoes" && (cartoesLoading ? <div className="flex justify-center py-20"><I.Spinner className="w-6 h-6 animate-spin" style={{ color: GREEN }} /></div> : <CartoesPage cartoes={cartoes} setCartoes={setCartoesSafe} />)}
+        {page === "recebiveis" && (recebiveisLoading ? <div className="flex justify-center py-20"><I.Spinner className="w-6 h-6 animate-spin" style={{ color: GREEN }} /></div> : <RecebiveisPage items={recebiveis} setItems={setRecebiveisSafe} />)}
         {page === "meta" && (metaLoading ? <div className="flex justify-center py-20"><I.Spinner className="w-6 h-6 animate-spin" style={{ color: GREEN }} /></div> : <MetaPage valor={meta} onSave={setMeta} totalGuardado={totalGuardado} />)}
-        {page === "visaogeral" && (loading ? <div className="flex justify-center py-20"><I.Spinner className="w-6 h-6 animate-spin" style={{ color: GREEN }} /></div> : <VisaoGeralPage currentData={data} totalInvestido={totalInvestido} patrimonio={patrimonio} patrimonioLoading={patrimonioLoading} />)}
+        {page === "visaogeral" && (loading ? <div className="flex justify-center py-20"><I.Spinner className="w-6 h-6 animate-spin" style={{ color: GREEN }} /></div> : <VisaoGeralPage currentData={data} totalInvestido={totalInvestido} patrimonio={patrimonio} patrimonioLoading={patrimonioLoading} historico={historico} meta={meta} totalGuardado={totalGuardado} />)}
         {page === "usuarios" && isAdmin && <UsuariosPage />}
       </div>
     </div>
