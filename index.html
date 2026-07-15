@@ -88,8 +88,10 @@ function shiftMonth(key, delta) {
 }
 function uid() { return Math.random().toString(36).slice(2, 10); }
 function emptyMonthData() {
-  return { receita: 0, investPercent: 0, investValor: 0, fixas: [], variaveis: [], categorias: [...DEFAULT_CATEGORIES] };
+  return { salario: 0, extras: [], fixas: [], variaveis: [], categorias: [...DEFAULT_CATEGORIES] };
 }
+function receitaTotal(d) { return (d.salario || 0) + (d.extras || []).reduce((s, r) => s + r.valor, 0); }
+function despesasTotal(d) { return (d.fixas || []).reduce((s, r) => s + r.valor, 0) + (d.variaveis || []).reduce((s, r) => s + r.valor, 0); }
 
 /* ---------------------------------------------------------------
    Minimal inline icon set (no external icon library needed)
@@ -126,11 +128,19 @@ const I = {
    Firestore helpers
 ----------------------------------------------------------------*/
 function fb() { return window.__firebase; }
+// Legacy docs stored a flat `receita` number; new docs split it into salario + extras.
+function migrateMonth(raw) {
+  if (!raw) return raw;
+  if (raw.salario === undefined && typeof raw.receita === "number") {
+    return { ...raw, salario: raw.receita, extras: raw.extras || [] };
+  }
+  return raw;
+}
 async function loadMonth(uidStr, key) {
   const f = fb();
   const ref = f.doc(f.db, "users", uidStr, "months", key);
   const snap = await f.getDoc(ref);
-  return snap.exists ? snap.data() : null;
+  return snap.exists ? migrateMonth(snap.data()) : null;
 }
 async function saveMonth(uidStr, key, data) {
   const f = fb();
@@ -142,21 +152,33 @@ async function loadAllMonths(uidStr) {
   const colRef = f.collection(f.db, "users", uidStr, "months");
   const snap = await f.getDocs(colRef);
   const out = [];
-  snap.forEach((d) => out.push(d.data()));
+  // "_investimentos" is a reserved key in this same collection (see load/saveInvestimentos) — not a real month.
+  snap.forEach((d) => { if (d.id !== "_investimentos") out.push(migrateMonth(d.data())); });
   return out;
+}
+async function loadInvestimentos(uidStr) {
+  const f = fb();
+  const ref = f.doc(f.db, "users", uidStr, "months", "_investimentos");
+  const snap = await f.getDoc(ref);
+  return snap.exists ? (snap.data().aportes || []) : [];
+}
+async function saveInvestimentos(uidStr, aportes) {
+  const f = fb();
+  const ref = f.doc(f.db, "users", uidStr, "months", "_investimentos");
+  await f.setDoc(ref, { aportes }, { merge: false });
 }
 
 /* ---------------------------------------------------------------
    Small UI atoms
 ----------------------------------------------------------------*/
 function LedgerNumber({ value, className = "", color }) {
-  return <span className={`font-mono-app tabular-nums ${className}`} style={color ? { color } : undefined}>{fmtBRL(value)}</span>;
+  return <span className={`font-mono-app tabular-nums whitespace-nowrap ${className}`} style={color ? { color } : undefined}>{fmtBRL(value)}</span>;
 }
 function IconField({ icon: IconComp, ...props }) {
   return (
     <div className="relative">
       <IconComp className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2" style={{ color: "#8A9587" }} />
-      <input {...props} className="w-full rounded-lg border pl-9 pr-3 py-2.5 text-sm outline-none transition focus:ring-2"
+      <input {...props} className="w-full rounded-lg border pl-9 pr-3 py-2.5 text-base sm:text-sm outline-none transition focus:ring-2"
         style={{ borderColor: LINE, background: "#FBFCFA", color: INK }} />
     </div>
   );
@@ -304,6 +326,12 @@ function SummaryCard({ label, value, icon: IconComp, color, action }) {
 /* ---------------------------------------------------------------
    Modals
 ----------------------------------------------------------------*/
+const KIND_META = {
+  fixa: { article: "Nova", noun: "despesa fixa" },
+  variavel: { article: "Nova", noun: "despesa variável" },
+  extra: { article: "Nova", noun: "receita extra" },
+  aporte: { article: "Novo", noun: "aporte" },
+};
 function ExpenseModal({ kind, initial, categorias, onSave, onClose, onAddCategoria }) {
   const [nome, setNome] = useState(initial?.nome || "");
   const [valor, setValor] = useState(initial?.valor ?? "");
@@ -319,30 +347,30 @@ function ExpenseModal({ kind, initial, categorias, onSave, onClose, onAddCategor
   }
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center px-4" style={{ background: "rgba(28,43,36,0.35)" }} onClick={onClose}>
-      <div className="w-full max-w-sm rounded-2xl p-5" style={{ background: SURFACE }} onClick={(e) => e.stopPropagation()}>
+      <div className="w-full max-w-sm max-h-[90vh] overflow-y-auto rounded-2xl p-5" style={{ background: SURFACE }} onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
-          <h3 className="font-serif-app text-lg" style={{ color: INK }}>{initial ? "Editar" : "Nova"} despesa {kind === "fixa" ? "fixa" : "variável"}</h3>
+          <h3 className="font-serif-app text-lg" style={{ color: INK }}>{initial ? "Editar" : KIND_META[kind].article} {KIND_META[kind].noun}</h3>
           <button onClick={onClose}><I.X className="w-4 h-4" style={{ color: "#8A9587" }} /></button>
         </div>
         <form onSubmit={submit} className="space-y-3">
           <div>
             <label className="text-xs font-medium" style={{ color: "#7C8A7C" }}>Data</label>
-            <input type="date" value={data} onChange={(e) => setData(e.target.value)} className="w-full mt-1 rounded-lg border px-3 py-2 text-sm outline-none" style={{ borderColor: LINE }} />
+            <input type="date" value={data} onChange={(e) => setData(e.target.value)} className="w-full mt-1 rounded-lg border px-3 py-2 text-base sm:text-sm outline-none" style={{ borderColor: LINE }} />
           </div>
           <div>
             <label className="text-xs font-medium" style={{ color: "#7C8A7C" }}>Nome</label>
-            <input value={nome} onChange={(e) => setNome(e.target.value)} placeholder="Ex: Aluguel" className="w-full mt-1 rounded-lg border px-3 py-2 text-sm outline-none" style={{ borderColor: LINE }} />
+            <input value={nome} onChange={(e) => setNome(e.target.value)} placeholder="Ex: Aluguel" className="w-full mt-1 rounded-lg border px-3 py-2 text-base sm:text-sm outline-none" style={{ borderColor: LINE }} />
           </div>
           <div>
             <label className="text-xs font-medium" style={{ color: "#7C8A7C" }}>Valor (R$)</label>
-            <input type="number" step="0.01" min="0" value={valor} onChange={(e) => setValor(e.target.value)} placeholder="0,00" className="w-full mt-1 rounded-lg border px-3 py-2 text-sm outline-none font-mono-app" style={{ borderColor: LINE }} />
+            <input type="number" step="0.01" min="0" value={valor} onChange={(e) => setValor(e.target.value)} placeholder="0,00" className="w-full mt-1 rounded-lg border px-3 py-2 text-base sm:text-sm outline-none font-mono-app" style={{ borderColor: LINE }} />
           </div>
           {kind === "variavel" && (
             <div>
               <label className="text-xs font-medium" style={{ color: "#7C8A7C" }}>Categoria</label>
               {!addingCat ? (
                 <select value={categoria} onChange={(e) => { if (e.target.value === "__new__") { setAddingCat(true); return; } setCategoria(e.target.value); }}
-                  className="w-full mt-1 rounded-lg border px-3 py-2 text-sm outline-none bg-white" style={{ borderColor: LINE }}>
+                  className="w-full mt-1 rounded-lg border px-3 py-2 text-base sm:text-sm outline-none bg-white" style={{ borderColor: LINE }}>
                   <option value="">Selecione…</option>
                   {categorias.map((c) => <option key={c} value={c}>{c}</option>)}
                   <option value="__new__">+ Nova categoria</option>
@@ -361,48 +389,16 @@ function ExpenseModal({ kind, initial, categorias, onSave, onClose, onAddCategor
     </div>
   );
 }
-function InvestModal({ receita, initialPercent, initialValor, onSave, onClose }) {
-  const [percent, setPercent] = useState(initialPercent || 0);
-  const [valor, setValor] = useState(initialValor || 0);
-  function setByPercent(p) { setPercent(p); setValor(Math.round((receita * p) / 100)); }
-  function setByValor(v) { setValor(v); setPercent(receita > 0 ? Math.round((v / receita) * 100) : 0); }
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center px-4" style={{ background: "rgba(28,43,36,0.35)" }} onClick={onClose}>
-      <div className="w-full max-w-sm rounded-2xl p-5" style={{ background: SURFACE }} onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-1">
-          <h3 className="font-serif-app text-lg" style={{ color: INK }}>Investir</h3>
-          <button onClick={onClose}><I.X className="w-4 h-4" style={{ color: "#8A9587" }} /></button>
-        </div>
-        <p className="text-xs mb-4" style={{ color: "#7C8A7C" }}>Quanto da sua receita você reserva pra investir.</p>
-        <div className="text-center mb-3"><span className="text-4xl font-serif-app" style={{ color: NAVY }}>{percent}%</span></div>
-        <input type="range" min="0" max="100" value={percent} onChange={(e) => setByPercent(Number(e.target.value))} className="w-full mb-3" style={{ accentColor: NAVY }} />
-        <div className="flex gap-2 mb-4">
-          {[20, 30, 40, 50].map((p) => (
-            <button key={p} onClick={() => setByPercent(p)} className="flex-1 py-1.5 rounded-lg text-sm border"
-              style={percent === p ? { background: NAVY, color: "#fff", borderColor: NAVY } : { borderColor: LINE, color: "#5C6A5F" }}>{p}%</button>
-          ))}
-        </div>
-        <p className="text-center text-xs mb-1" style={{ color: "#7C8A7C" }}>Valor a investir</p>
-        <input type="number" value={valor} onChange={(e) => setByValor(Number(e.target.value))} className="w-full text-center text-2xl font-mono-app rounded-lg border py-2 mb-1 outline-none" style={{ borderColor: LINE, color: NAVY }} />
-        <p className="text-center text-[11px] mb-4" style={{ color: "#9CA89C" }}>Toque no valor pra digitar. O percentual se ajusta sozinho.</p>
-        <div className="flex gap-2">
-          <button onClick={onClose} className="flex-1 py-2.5 rounded-lg text-sm border" style={{ borderColor: LINE, color: "#5C6A5F" }}>Cancelar</button>
-          <button onClick={() => onSave(percent, valor)} className="flex-1 py-2.5 rounded-lg text-sm font-medium text-white" style={{ background: GREEN }}>Salvar</button>
-        </div>
-      </div>
-    </div>
-  );
-}
-function ReceitaModal({ initial, onSave, onClose }) {
+function SalarioModal({ initial, onSave, onClose }) {
   const [valor, setValor] = useState(initial || 0);
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center px-4" style={{ background: "rgba(28,43,36,0.35)" }} onClick={onClose}>
       <div className="w-full max-w-xs rounded-2xl p-5" style={{ background: SURFACE }} onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
-          <h3 className="font-serif-app text-lg" style={{ color: INK }}>Receita do mês</h3>
+          <h3 className="font-serif-app text-lg" style={{ color: INK }}>Salário base do mês</h3>
           <button onClick={onClose}><I.X className="w-4 h-4" style={{ color: "#8A9587" }} /></button>
         </div>
-        <input type="number" step="0.01" min="0" value={valor} onChange={(e) => setValor(e.target.value)} className="w-full text-center text-2xl font-mono-app rounded-lg border py-2 mb-4 outline-none" style={{ borderColor: LINE, color: GREEN }} />
+        <input type="number" step="0.01" min="0" value={valor} onChange={(e) => setValor(e.target.value)} className="w-full text-center text-2xl font-mono-app rounded-lg border py-2 mb-4 outline-none text-base sm:text-2xl" style={{ borderColor: LINE, color: GREEN }} />
         <button onClick={() => onSave(Number(valor))} className="w-full py-2.5 rounded-lg text-sm font-medium text-white" style={{ background: GREEN }}>Salvar</button>
       </div>
     </div>
@@ -412,28 +408,30 @@ function ReceitaModal({ initial, onSave, onClose }) {
 /* ---------------------------------------------------------------
    Expense table
 ----------------------------------------------------------------*/
-function ExpenseTable({ rows, kind, onEdit, onDelete }) {
-  if (rows.length === 0) return <div className="py-10 text-center text-sm" style={{ color: "#9CA89C" }}>Nenhuma despesa lançada neste mês.</div>;
+function ExpenseTable({ rows, kind, onEdit, onDelete, sign = -1, color = BRICK, emptyLabel = "Nenhuma despesa lançada neste mês." }) {
+  if (rows.length === 0) return <div className="py-10 text-center text-sm" style={{ color: "#9CA89C" }}>{emptyLabel}</div>;
   const sorted = [...rows].sort((a, b) => (a.data || "").localeCompare(b.data || ""));
-  const gridCols = kind === "variavel" ? "70px 1fr 110px 90px 60px" : "70px 1fr 90px 60px";
+  const gridCols = kind === "variavel" ? "3.2rem 1fr 5rem 6rem 2.5rem" : "3.2rem 1fr 6rem 2.5rem";
   return (
-    <div>
-      <div className="grid text-[11px] uppercase tracking-wide font-medium pb-2 mb-1" style={{ color: "#8A9587", borderBottom: `1px solid ${LINE}`, gridTemplateColumns: gridCols }}>
-        <span>Data</span><span>Nome</span>{kind === "variavel" && <span>Categoria</span>}<span className="text-right">Valor</span><span />
-      </div>
-      {sorted.map((r) => (
-        <div key={r.id} className="grid items-center py-2 text-sm" style={{ borderBottom: `1px dashed ${LINE}`, gridTemplateColumns: gridCols }}>
-          <span className="text-xs" style={{ color: "#7C8A7C" }}>{r.data ? r.data.slice(8, 10) + "/" + r.data.slice(5, 7) : ""}</span>
-          <span style={{ color: INK }}>{r.nome}</span>
-          {kind === "variavel" && <span className="text-xs px-2 py-0.5 rounded-full w-fit" style={{ background: BG, color: "#5C6A5F" }}>{r.categoria}</span>}
-          <LedgerNumber value={-r.valor} className="text-right text-sm" color={BRICK} />
-          <div className="flex justify-end gap-2">
-            <button onClick={() => onEdit(r)}><I.Pencil className="w-3.5 h-3.5" style={{ color: "#8A9587" }} /></button>
-            <button onClick={() => onDelete(r.id)}><I.Trash className="w-3.5 h-3.5" style={{ color: BRICK }} /></button>
-          </div>
+    <div className="overflow-x-auto -mx-1 px-1">
+      <div style={{ minWidth: kind === "variavel" ? 400 : 0 }}>
+        <div className="grid text-[11px] uppercase tracking-wide font-medium pb-2 mb-1" style={{ color: "#8A9587", borderBottom: `1px solid ${LINE}`, gridTemplateColumns: gridCols }}>
+          <span>Data</span><span>Nome</span>{kind === "variavel" && <span>Categoria</span>}<span className="text-right">Valor</span><span />
         </div>
-      ))}
-      <div className="flex justify-end pt-3"><LedgerNumber value={-rows.reduce((s, r) => s + r.valor, 0)} className="text-base font-semibold" color={BRICK} /></div>
+        {sorted.map((r) => (
+          <div key={r.id} className="grid items-center py-2 text-sm" style={{ borderBottom: `1px dashed ${LINE}`, gridTemplateColumns: gridCols }}>
+            <span className="text-xs" style={{ color: "#7C8A7C" }}>{r.data ? r.data.slice(8, 10) + "/" + r.data.slice(5, 7) : ""}</span>
+            <span className="truncate pr-2" style={{ color: INK }}>{r.nome}</span>
+            {kind === "variavel" && <span className="text-xs px-2 py-0.5 rounded-full w-fit truncate" style={{ background: BG, color: "#5C6A5F" }}>{r.categoria}</span>}
+            <LedgerNumber value={sign * r.valor} className="text-right text-sm" color={color} />
+            <div className="flex justify-end gap-2">
+              <button onClick={() => onEdit(r)}><I.Pencil className="w-3.5 h-3.5" style={{ color: "#8A9587" }} /></button>
+              <button onClick={() => onDelete(r.id)}><I.Trash className="w-3.5 h-3.5" style={{ color: BRICK }} /></button>
+            </div>
+          </div>
+        ))}
+        <div className="flex justify-end pt-3"><LedgerNumber value={sign * rows.reduce((s, r) => s + r.valor, 0)} className="text-base font-semibold" color={color} /></div>
+      </div>
     </div>
   );
 }
@@ -444,17 +442,19 @@ function ExpenseTable({ rows, kind, onEdit, onDelete }) {
 function OrcamentoPage({ data, setData }) {
   const [tab, setTab] = useState("fixa");
   const [modal, setModal] = useState(null);
-  const [investOpen, setInvestOpen] = useState(false);
-  const [receitaOpen, setReceitaOpen] = useState(false);
+  const [salarioOpen, setSalarioOpen] = useState(false);
 
+  const totalExtras = data.extras.reduce((s, r) => s + r.valor, 0);
+  const receita = data.salario + totalExtras;
   const totalFixas = data.fixas.reduce((s, r) => s + r.valor, 0);
   const totalVariaveis = data.variaveis.reduce((s, r) => s + r.valor, 0);
   const despesas = totalFixas + totalVariaveis;
-  const saldo = data.receita - despesas - (data.investValor || 0);
+  const saldo = receita - despesas;
 
+  const LIST_BY_KIND = { fixa: "fixas", variavel: "variaveis", extra: "extras" };
   function saveExpense(kind, item) {
     setData((d) => {
-      const list = kind === "fixa" ? "fixas" : "variaveis";
+      const list = LIST_BY_KIND[kind];
       const arr = d[list];
       const exists = arr.some((r) => r.id === item.id);
       const next = exists ? arr.map((r) => (r.id === item.id ? item : r)) : [...arr, item];
@@ -463,7 +463,7 @@ function OrcamentoPage({ data, setData }) {
     setModal(null);
   }
   function deleteExpense(kind, id) {
-    setData((d) => { const list = kind === "fixa" ? "fixas" : "variaveis"; return { ...d, [list]: d[list].filter((r) => r.id !== id) }; });
+    setData((d) => { const list = LIST_BY_KIND[kind]; return { ...d, [list]: d[list].filter((r) => r.id !== id) }; });
   }
   function addCategoria(c) { setData((d) => (d.categorias.includes(c) ? d : { ...d, categorias: [...d.categorias, c] })); }
 
@@ -473,47 +473,48 @@ function OrcamentoPage({ data, setData }) {
     data.variaveis.forEach((r) => { map[r.categoria] = (map[r.categoria] || 0) + r.valor; });
     return Object.entries(map).map(([name, value], i) => ({ name, value, color: PALETTE[i % PALETTE.length] }));
   }, [data.variaveis]);
-  const donutItems = tab === "fixa" ? fixasDonut : tab === "variavel" ? variaveisByCat : [];
+  const receitaDonut = [{ name: "Salário", value: data.salario, color: GREEN }, { name: "Extras", value: totalExtras, color: GOLD }];
+  const donutItems = tab === "fixa" ? fixasDonut : tab === "variavel" ? variaveisByCat : receitaDonut;
 
   return (
     <div>
       <div className="flex flex-wrap gap-3 mb-6">
-        <SummaryCard label="Receita" value={data.receita} icon={I.Wallet} color={GREEN} action={<button onClick={() => setReceitaOpen(true)}><I.Pencil className="w-3 h-3" style={{ color: "#8A9587" }} /></button>} />
-        <SummaryCard label="Investir" value={data.investValor || 0} icon={I.Piggy} color={NAVY} action={<button onClick={() => setInvestOpen(true)} className="text-[10px] font-medium px-2 py-0.5 rounded-full text-white" style={{ background: NAVY }}>Ajustar</button>} />
+        <SummaryCard label="Receita" value={receita} icon={I.Wallet} color={GREEN} />
         <SummaryCard label="Despesas" value={despesas} icon={I.Receipt} color={BRICK} />
         <SummaryCard label="Saldo" value={saldo} icon={I.Grid} color={saldo < 0 ? BRICK : INK} />
       </div>
       <div className="grid lg:grid-cols-[1fr_320px] gap-5">
         <div className="rounded-xl p-5" style={{ background: SURFACE, border: `1px solid ${LINE}` }}>
           <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
-            <div className="flex rounded-lg p-1" style={{ background: BG }}>
+            <div className="flex rounded-lg p-1 overflow-x-auto" style={{ background: BG }}>
               {[["receita", "Receita"], ["fixa", "Despesa fixa"], ["variavel", "Despesa variável"]].map(([k, label]) => (
-                <button key={k} onClick={() => setTab(k)} className="px-3 py-1.5 text-xs sm:text-sm rounded-md font-medium transition"
+                <button key={k} onClick={() => setTab(k)} className="px-3 py-1.5 text-xs sm:text-sm rounded-md font-medium transition whitespace-nowrap"
                   style={tab === k ? { background: SURFACE, color: INK, boxShadow: "0 1px 2px rgba(0,0,0,0.06)" } : { color: "#7C8A7C" }}>{label}</button>
               ))}
             </div>
-            {tab !== "receita" && <button onClick={() => setModal({ kind: tab })} className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg text-white" style={{ background: GREEN }}><I.Plus className="w-3.5 h-3.5" /> Adicionar</button>}
+            <button onClick={() => setModal({ kind: tab === "receita" ? "extra" : tab })} className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg text-white shrink-0" style={{ background: GREEN }}><I.Plus className="w-3.5 h-3.5" /> Adicionar</button>
           </div>
           {tab === "receita" && (
-            <div className="py-6 text-center">
-              <p className="text-xs mb-2" style={{ color: "#7C8A7C" }}>Receita cadastrada para este mês</p>
-              <LedgerNumber value={data.receita} className="text-3xl font-semibold" color={GREEN} />
-              <div className="mt-4"><button onClick={() => setReceitaOpen(true)} className="text-xs font-medium px-3 py-1.5 rounded-lg" style={{ background: BG, color: INK }}>Editar receita</button></div>
+            <div className="mb-4 flex items-center justify-between gap-3 flex-wrap">
+              <div>
+                <p className="text-xs mb-1" style={{ color: "#7C8A7C" }}>Salário base</p>
+                <LedgerNumber value={data.salario} className="text-2xl font-semibold" color={GREEN} />
+              </div>
+              <button onClick={() => setSalarioOpen(true)} className="text-xs font-medium px-3 py-1.5 rounded-lg" style={{ background: BG, color: INK }}>Editar salário</button>
             </div>
           )}
+          {tab === "receita" && <p className="text-xs font-medium uppercase tracking-wide mb-1" style={{ color: "#8A9587" }}>Receitas extras</p>}
+          {tab === "receita" && <ExpenseTable rows={data.extras} kind="extra" sign={1} color={GREEN} emptyLabel="Nenhuma receita extra lançada neste mês." onEdit={(r) => setModal({ kind: "extra", initial: r })} onDelete={(id) => deleteExpense("extra", id)} />}
           {tab === "fixa" && <ExpenseTable rows={data.fixas} kind="fixa" onEdit={(r) => setModal({ kind: "fixa", initial: r })} onDelete={(id) => deleteExpense("fixa", id)} />}
           {tab === "variavel" && <ExpenseTable rows={data.variaveis} kind="variavel" onEdit={(r) => setModal({ kind: "variavel", initial: r })} onDelete={(id) => deleteExpense("variavel", id)} />}
         </div>
         <div className="rounded-xl p-5" style={{ background: SURFACE, border: `1px solid ${LINE}` }}>
-          <p className="text-xs font-medium uppercase tracking-wide mb-1" style={{ color: "#8A9587" }}>{tab === "fixa" ? "Despesas fixas" : tab === "variavel" ? "Despesas variáveis" : "Distribuição"}</p>
-          {tab === "receita" ? (
-            <div className="h-52 flex items-center justify-center text-sm text-center px-4" style={{ color: "#9CA89C" }}>Cadastre despesas para ver a distribuição aqui.</div>
-          ) : (<><Donut items={donutItems} /><Legend items={donutItems} /></>)}
+          <p className="text-xs font-medium uppercase tracking-wide mb-1" style={{ color: "#8A9587" }}>{tab === "fixa" ? "Despesas fixas" : tab === "variavel" ? "Despesas variáveis" : "Salário x Extras"}</p>
+          <Donut items={donutItems} /><Legend items={donutItems} />
         </div>
       </div>
       {modal && <ExpenseModal kind={modal.kind} initial={modal.initial} categorias={data.categorias} onSave={(item) => saveExpense(modal.kind, item)} onClose={() => setModal(null)} onAddCategoria={addCategoria} />}
-      {investOpen && <InvestModal receita={data.receita} initialPercent={data.investPercent} initialValor={data.investValor} onSave={(percent, valor) => { setData((d) => ({ ...d, investPercent: percent, investValor: valor })); setInvestOpen(false); }} onClose={() => setInvestOpen(false)} />}
-      {receitaOpen && <ReceitaModal initial={data.receita} onSave={(v) => { setData((d) => ({ ...d, receita: v })); setReceitaOpen(false); }} onClose={() => setReceitaOpen(false)} />}
+      {salarioOpen && <SalarioModal initial={data.salario} onSave={(v) => { setData((d) => ({ ...d, salario: v })); setSalarioOpen(false); }} onClose={() => setSalarioOpen(false)} />}
     </div>
   );
 }
@@ -521,29 +522,26 @@ function OrcamentoPage({ data, setData }) {
 /* ---------------------------------------------------------------
    Visão geral page
 ----------------------------------------------------------------*/
-function VisaoGeralPage({ uidStr, currentData, monthKeyStr }) {
-  const [totals, setTotals] = useState({ patrimonio: 0, investido: 0, loading: true });
+function VisaoGeralPage({ uidStr, currentData, monthKeyStr, investimentos }) {
+  const [totals, setTotals] = useState({ patrimonio: 0, loading: true });
   useEffect(() => {
     let cancelled = false;
     (async () => {
       const months = await loadAllMonths(uidStr);
-      let patrimonio = 0, investido = 0;
-      months.forEach((val) => {
-        const despesas = (val.fixas || []).reduce((s, r) => s + r.valor, 0) + (val.variaveis || []).reduce((s, r) => s + r.valor, 0);
-        const saldo = (val.receita || 0) - despesas - (val.investValor || 0);
-        patrimonio += saldo + (val.investValor || 0);
-        investido += (val.investValor || 0);
-      });
-      if (!cancelled) setTotals({ patrimonio, investido, loading: false });
+      let patrimonio = 0;
+      months.forEach((val) => { patrimonio += receitaTotal(val) - despesasTotal(val); });
+      if (!cancelled) setTotals({ patrimonio, loading: false });
     })();
     return () => { cancelled = true; };
   }, [uidStr, monthKeyStr, currentData]);
 
-  const despesasMes = currentData.fixas.reduce((s, r) => s + r.valor, 0) + currentData.variaveis.reduce((s, r) => s + r.valor, 0);
-  const metaPct = currentData.receita > 0 ? Math.min(100, Math.round((despesasMes / currentData.receita) * 100)) : 0;
+  const totalInvestido = investimentos.reduce((s, a) => s + a.valor, 0);
+  const receitaMes = receitaTotal(currentData);
+  const despesasMes = despesasTotal(currentData);
+  const metaPct = receitaMes > 0 ? Math.min(100, Math.round((despesasMes / receitaMes) * 100)) : 0;
   const cards = [
-    { label: "Patrimônio total", value: totals.patrimonio, bg: GREEN, hint: "Saldo + investido acumulados" },
-    { label: "Total investido", value: totals.investido, bg: NAVY, hint: totals.investido > 0 ? "Seu dinheiro trabalhando" : "Comece a investir. Faça seu dinheiro render." },
+    { label: "Patrimônio acumulado", value: totals.patrimonio, bg: GREEN, hint: "Receitas menos despesas de todo o histórico", loading: totals.loading },
+    { label: "Total investido", value: totalInvestido, bg: NAVY, hint: totalInvestido > 0 ? "Seu dinheiro trabalhando" : "Comece a investir. Faça seu dinheiro render." },
     { label: "Despesas do mês", value: despesasMes, bg: BRICK, hint: `${metaPct}% da receita`, progress: metaPct },
   ];
   return (
@@ -551,7 +549,7 @@ function VisaoGeralPage({ uidStr, currentData, monthKeyStr }) {
       {cards.map((c, i) => (
         <div key={i} className="rounded-xl p-5 text-white relative overflow-hidden" style={{ background: c.bg, minHeight: 140 }}>
           <p className="text-[11px] uppercase tracking-wide opacity-80 mb-3">{c.label}</p>
-          {totals.loading && i < 2 ? <I.Spinner className="w-5 h-5 animate-spin opacity-80" /> : <LedgerNumber value={c.value} className="text-2xl font-semibold" />}
+          {c.loading ? <I.Spinner className="w-5 h-5 animate-spin opacity-80" /> : <LedgerNumber value={c.value} className="text-2xl font-semibold" />}
           <p className="text-xs opacity-75 mt-2">{c.hint}</p>
           {typeof c.progress === "number" && <div className="absolute bottom-0 left-0 h-1 bg-white/90" style={{ width: `${c.progress}%` }} />}
         </div>
@@ -561,21 +559,64 @@ function VisaoGeralPage({ uidStr, currentData, monthKeyStr }) {
 }
 
 /* ---------------------------------------------------------------
+   Investimentos page
+----------------------------------------------------------------*/
+function InvestimentosPage({ investimentos, setInvestimentos }) {
+  const [modal, setModal] = useState(null);
+  const total = investimentos.reduce((s, a) => s + a.valor, 0);
+
+  function saveAporte(item) {
+    setInvestimentos((list) => {
+      const exists = list.some((r) => r.id === item.id);
+      return exists ? list.map((r) => (r.id === item.id ? item : r)) : [...list, item];
+    });
+    setModal(null);
+  }
+  function deleteAporte(id) { setInvestimentos((list) => list.filter((r) => r.id !== id)); }
+
+  return (
+    <div>
+      <div className="flex flex-wrap gap-3 mb-6">
+        <SummaryCard label="Total investido" value={total} icon={I.Piggy} color={NAVY} />
+      </div>
+      <div className="rounded-xl p-5" style={{ background: SURFACE, border: `1px solid ${LINE}` }}>
+        <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+          <p className="text-sm font-medium" style={{ color: INK }}>Seus aportes</p>
+          <button onClick={() => setModal({ kind: "aporte" })} className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg text-white" style={{ background: NAVY }}><I.Plus className="w-3.5 h-3.5" /> Adicionar aporte</button>
+        </div>
+        <ExpenseTable rows={investimentos} kind="aporte" sign={1} color={NAVY} emptyLabel="Nenhum aporte lançado ainda." onEdit={(r) => setModal({ kind: "aporte", initial: r })} onDelete={deleteAporte} />
+      </div>
+      {modal && <ExpenseModal kind="aporte" initial={modal.initial} categorias={[]} onAddCategoria={() => {}} onSave={saveAporte} onClose={() => setModal(null)} />}
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------
    App shell
 ----------------------------------------------------------------*/
+const PAGE_TITLES = { orcamento: "Orçamento", investimentos: "Investimentos", visaogeral: "Visão geral" };
 function MainApp({ user }) {
   const [page, setPage] = useState("orcamento");
   const [mKey, setMKey] = useState(monthKey(new Date()));
   const [data, setData] = useState(emptyMonthData());
   const [loading, setLoading] = useState(true);
   const saveTimer = useRef(null);
+  const [investimentos, setInvestimentos] = useState([]);
+  const [investLoading, setInvestLoading] = useState(true);
+  const investSaveTimer = useRef(null);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     (async () => {
       const stored = await loadMonth(user.uid, mKey);
-      if (!cancelled) { setData(stored ? { ...emptyMonthData(), ...stored } : emptyMonthData()); setLoading(false); }
+      if (stored) {
+        if (!cancelled) { setData({ ...emptyMonthData(), ...stored }); setLoading(false); }
+        return;
+      }
+      // New month: carry the salary forward from the previous month, since it rarely changes.
+      const prev = await loadMonth(user.uid, shiftMonth(mKey, -1));
+      if (!cancelled) { setData({ ...emptyMonthData(), salario: prev ? prev.salario || 0 : 0 }); setLoading(false); }
     })();
     return () => { cancelled = true; };
   }, [user.uid, mKey]);
@@ -587,35 +628,55 @@ function MainApp({ user }) {
     return () => clearTimeout(saveTimer.current);
   }, [data, loading, user.uid, mKey]);
 
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const list = await loadInvestimentos(user.uid);
+      if (!cancelled) { setInvestimentos(list); setInvestLoading(false); }
+    })();
+    return () => { cancelled = true; };
+  }, [user.uid]);
+
+  useEffect(() => {
+    if (investLoading) return;
+    clearTimeout(investSaveTimer.current);
+    investSaveTimer.current = setTimeout(() => { saveInvestimentos(user.uid, investimentos); }, 500);
+    return () => clearTimeout(investSaveTimer.current);
+  }, [investimentos, investLoading, user.uid]);
+
   const setDataSafe = useCallback((updater) => setData((prev) => (typeof updater === "function" ? updater(prev) : updater)), []);
+  const setInvestimentosSafe = useCallback((updater) => setInvestimentos((prev) => (typeof updater === "function" ? updater(prev) : updater)), []);
 
   return (
     <div className="min-h-screen w-full" style={{ background: BG }}>
       <div className="max-w-5xl mx-auto px-4 sm:px-6 py-6">
         <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
-          <div>
-            <p className="text-xs" style={{ color: "#7C8A7C" }}>Olá, {user.email}</p>
-            <h1 className="text-xl font-serif-app" style={{ color: INK }}>{page === "orcamento" ? "Orçamento" : "Visão geral"}</h1>
+          <div className="min-w-0">
+            <p className="text-xs truncate" style={{ color: "#7C8A7C" }}>Olá, {user.email}</p>
+            <h1 className="text-xl font-serif-app" style={{ color: INK }}>{PAGE_TITLES[page]}</h1>
           </div>
           <div className="flex items-center gap-2">
-            <div className="flex items-center gap-1 rounded-lg border px-2 py-1.5" style={{ borderColor: LINE, background: SURFACE }}>
-              <button onClick={() => setMKey((k) => shiftMonth(k, -1))}><I.ChevLeft className="w-4 h-4" style={{ color: "#7C8A7C" }} /></button>
-              <span className="text-xs font-medium px-1 w-28 text-center" style={{ color: INK }}>{monthLabel(mKey)}</span>
-              <button onClick={() => setMKey((k) => shiftMonth(k, 1))}><I.ChevRight className="w-4 h-4" style={{ color: "#7C8A7C" }} /></button>
-            </div>
-            <button onClick={() => fb().signOut(fb().auth)} className="p-2 rounded-lg border" style={{ borderColor: LINE, background: SURFACE }}><I.Logout className="w-4 h-4" style={{ color: "#7C8A7C" }} /></button>
+            {page !== "investimentos" && (
+              <div className="flex items-center gap-1 rounded-lg border px-2 py-1.5" style={{ borderColor: LINE, background: SURFACE }}>
+                <button onClick={() => setMKey((k) => shiftMonth(k, -1))}><I.ChevLeft className="w-4 h-4" style={{ color: "#7C8A7C" }} /></button>
+                <span className="text-xs font-medium px-1 w-24 sm:w-28 text-center" style={{ color: INK }}>{monthLabel(mKey)}</span>
+                <button onClick={() => setMKey((k) => shiftMonth(k, 1))}><I.ChevRight className="w-4 h-4" style={{ color: "#7C8A7C" }} /></button>
+              </div>
+            )}
+            <button onClick={() => fb().signOut(fb().auth)} className="p-2 rounded-lg border shrink-0" style={{ borderColor: LINE, background: SURFACE }}><I.Logout className="w-4 h-4" style={{ color: "#7C8A7C" }} /></button>
           </div>
         </div>
-        <div className="flex gap-1 mb-6 rounded-lg p-1 w-fit" style={{ background: "#E2E9DE" }}>
-          {[["orcamento", "Orçamento", I.List], ["visaogeral", "Visão geral", I.Trend]].map(([k, label, IconComp]) => (
-            <button key={k} onClick={() => setPage(k)} className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md font-medium transition"
+        <div className="flex gap-1 mb-6 rounded-lg p-1 w-fit max-w-full overflow-x-auto" style={{ background: "#E2E9DE" }}>
+          {[["orcamento", "Orçamento", I.List], ["investimentos", "Investimentos", I.Piggy], ["visaogeral", "Visão geral", I.Trend]].map(([k, label, IconComp]) => (
+            <button key={k} onClick={() => setPage(k)} className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs sm:text-sm rounded-md font-medium transition whitespace-nowrap"
               style={page === k ? { background: SURFACE, color: INK, boxShadow: "0 1px 2px rgba(0,0,0,0.08)" } : { color: "#6B7A67" }}>
               <IconComp className="w-3.5 h-3.5" />{label}
             </button>
           ))}
         </div>
-        {loading ? <div className="flex justify-center py-20"><I.Spinner className="w-6 h-6 animate-spin" style={{ color: GREEN }} /></div>
-          : page === "orcamento" ? <OrcamentoPage data={data} setData={setDataSafe} /> : <VisaoGeralPage uidStr={user.uid} currentData={data} monthKeyStr={mKey} />}
+        {page === "orcamento" && (loading ? <div className="flex justify-center py-20"><I.Spinner className="w-6 h-6 animate-spin" style={{ color: GREEN }} /></div> : <OrcamentoPage data={data} setData={setDataSafe} />)}
+        {page === "investimentos" && (investLoading ? <div className="flex justify-center py-20"><I.Spinner className="w-6 h-6 animate-spin" style={{ color: GREEN }} /></div> : <InvestimentosPage investimentos={investimentos} setInvestimentos={setInvestimentosSafe} />)}
+        {page === "visaogeral" && (loading ? <div className="flex justify-center py-20"><I.Spinner className="w-6 h-6 animate-spin" style={{ color: GREEN }} /></div> : <VisaoGeralPage uidStr={user.uid} currentData={data} monthKeyStr={mKey} investimentos={investimentos} />)}
       </div>
     </div>
   );
